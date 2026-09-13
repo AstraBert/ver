@@ -1,0 +1,14 @@
+[package]
+name = "ver"
+version = "0.1.0-alpha"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "v5"] }
+ignore = "0.4.25"
+blake3 = "1.8"
+postcard = { version = "1.1", features = ["alloc"] }
+redb = "4.2"
+rocksdb = "0.25"
