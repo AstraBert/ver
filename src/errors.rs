@@ -1,3 +1,4 @@
+use ignore::Error as IgnoreError;
 use postcard::Error as PostcardError;
 use redb::{
     CommitError, DatabaseError, Error as RedbError, StorageError, TableError, TransactionError,
@@ -7,7 +8,7 @@ use std::{error::Error, fmt::Display, io};
 
 /// Internal error that abstracts errors from other
 /// sources
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VerError {
     pub message: String,
 }
@@ -114,6 +115,14 @@ impl From<PostcardError> for VerError {
                 "Error while serializing or deserializing with postcard: {}",
                 value
             ),
+        }
+    }
+}
+
+impl From<IgnoreError> for VerError {
+    fn from(value: IgnoreError) -> Self {
+        Self {
+            message: format!("Error while walking the directory recursively: {}", value),
         }
     }
 }

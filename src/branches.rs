@@ -1,19 +1,24 @@
 use redb::{Database, ReadableDatabase, ReadableTableMetadata};
-use std::{fs, io, path::Path};
+use std::{env, fs, path::Path};
 
 use crate::{
+    commons::resolve_ver_dir_path,
     errors::VerError,
     init::{BRANCHES_TABLE, CURRENT_BRANCH_FILE, REDB_PATH, VER_DIRECTORY},
 };
 
-pub fn get_current_branch() -> io::Result<String> {
-    let path = Path::new(VER_DIRECTORY).join(CURRENT_BRANCH_FILE);
+pub fn get_current_branch() -> Result<String, VerError> {
+    let current_dir = env::current_dir()?;
+    let resolved = resolve_ver_dir_path(current_dir)?;
+    let path = resolved.join(CURRENT_BRANCH_FILE);
     let branch = fs::read_to_string(path)?;
     Ok(branch)
 }
 
 pub fn get_branch_id(branch: &str) -> Result<u32, VerError> {
-    let db = Database::open(Path::new(VER_DIRECTORY).join(REDB_PATH))?;
+    let current_dir = env::current_dir()?;
+    let resolved = resolve_ver_dir_path(current_dir)?;
+    let db = Database::open(resolved.join(REDB_PATH))?;
     let txn = db.begin_read()?;
     let table = txn.open_table(BRANCHES_TABLE)?;
     let branch_id = table.get(branch)?;
@@ -24,7 +29,9 @@ pub fn get_branch_id(branch: &str) -> Result<u32, VerError> {
 }
 
 pub fn switch_branch(branch_name: &str) -> Result<(), VerError> {
-    let db = Database::open(Path::new(VER_DIRECTORY).join(REDB_PATH))?;
+    let current_dir = env::current_dir()?;
+    let resolved = resolve_ver_dir_path(current_dir)?;
+    let db = Database::open(resolved.join(REDB_PATH))?;
     let txn = db.begin_read()?;
     let table = txn.open_table(BRANCHES_TABLE)?;
     // ids are 0-based, so the next ID
@@ -36,10 +43,7 @@ pub fn switch_branch(branch_name: &str) -> Result<(), VerError> {
         let mut tb = write_txn.open_table(BRANCHES_TABLE)?;
         tb.insert(branch_name, new_id as u32)?;
     }
-    fs::write(
-        Path::new(VER_DIRECTORY).join(CURRENT_BRANCH_FILE),
-        branch_name,
-    )?;
+    fs::write(resolved.join(CURRENT_BRANCH_FILE), branch_name)?;
 
     Ok(())
 }

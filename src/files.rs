@@ -7,6 +7,7 @@ use alloc::vec::Vec as AllocVec;
 
 use crate::{
     branches::{get_branch_id, get_current_branch},
+    commons::resolve_ver_dir_path,
     errors::VerError,
     init::{REDB_PATH, VER_DIRECTORY, init_blobs_db},
 };
@@ -58,8 +59,10 @@ pub fn make_entry_id(file_id: u128, branch_id: u32) -> [u8; 20] {
 
 pub fn store_file(file_path: &str) -> Result<(), VerError> {
     // open databases
-    let redb = Database::open(Path::new(VER_DIRECTORY).join(REDB_PATH))?;
-    let blobdb = init_blobs_db(&env::current_dir().expect("Could not infer current directory"))?;
+    let current_dir = env::current_dir()?;
+    let resolved = resolve_ver_dir_path(current_dir)?;
+    let redb = Database::open(&resolved.join(REDB_PATH))?;
+    let blobdb = init_blobs_db(&resolved)?;
 
     // compute hash
     let content = fs::read(file_path)?;
@@ -139,5 +142,46 @@ pub fn store_file(file_path: &str) -> Result<(), VerError> {
 
     // insert in blob db
     blobdb.put(hash, content)?;
+    Ok(())
+}
+
+pub fn add(paths: Vec<&str>) -> Result<(), VerError> {
+    for p in paths {
+        let fp = Path::new(p);
+        if fp.is_file() {
+            store_file(p)?;
+        } else {
+            let walker = ignore::WalkBuilder::new(p)
+                .add_custom_ignore_filename(".verignore")
+                .filter_entry(|d| {
+                    if d.path().is_file() {
+                        if d.path()
+                            .ancestors()
+                            .any(|a| a.ends_with(".ver") || a.ends_with(".ver/"))
+                        {
+                            return false;
+                        }
+                        return true;
+                    } else {
+                        if d.path().ends_with(".ver")
+                            || d.path().ends_with(".ver/")
+                            || d.path()
+                                .ancestors()
+                                .any(|a| a.ends_with(".ver") || a.ends_with(".ver/"))
+                        {
+                            return false;
+                        }
+                        return true;
+                    }
+                })
+                .build();
+            for entry in walker {
+                let entry = entry?;
+                if entry.path().is_file() {
+                    store_file(&entry.path().to_string_lossy().to_string())?;
+                }
+            }
+        }
+    }
     Ok(())
 }
