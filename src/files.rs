@@ -57,7 +57,7 @@ pub fn make_entry_id(file_id: u128, branch_id: u32) -> [u8; 20] {
     combined
 }
 
-pub fn store_file(file_path: &str) -> Result<(), VerError> {
+pub fn store_file(file_path: &str, branch_id: u32) -> Result<(), VerError> {
     // open databases
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
@@ -67,10 +67,6 @@ pub fn store_file(file_path: &str) -> Result<(), VerError> {
     // compute hash
     let content = fs::read(file_path)?;
     let hash = blake3::hash(&content).as_bytes().to_owned();
-
-    // get branch ID
-    let branch = get_current_branch()?;
-    let branch_id = get_branch_id(&branch)?;
 
     // get file and entry ID
     let file_id = get_file_id(file_path);
@@ -146,10 +142,14 @@ pub fn store_file(file_path: &str) -> Result<(), VerError> {
 }
 
 pub fn add(paths: Vec<&str>) -> Result<(), VerError> {
+    // get branch ID
+    let branch = get_current_branch()?;
+    let branch_id = get_branch_id(&branch)?;
+
     for p in paths {
         let fp = Path::new(p);
         if fp.is_file() {
-            store_file(p)?;
+            store_file(p, branch_id)?;
         } else {
             let walker = ignore::WalkBuilder::new(p)
                 .add_custom_ignore_filename(".verignore")
@@ -178,7 +178,7 @@ pub fn add(paths: Vec<&str>) -> Result<(), VerError> {
             for entry in walker {
                 let entry = entry?;
                 if entry.path().is_file() {
-                    store_file(&entry.path().to_string_lossy().to_string())?;
+                    store_file(&entry.path().to_string_lossy().to_string(), branch_id)?;
                 }
             }
         }
