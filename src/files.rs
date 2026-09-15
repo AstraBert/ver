@@ -9,12 +9,10 @@ use crate::{
     branches::{get_branch_id, get_current_branch},
     commons::resolve_ver_dir_path,
     errors::VerError,
-    init::{REDB_PATH, VER_DIRECTORY, init_blobs_db},
+    init::{REDB_PATH, init_blobs_db},
 };
 
 pub const METADATA_TABLE: TableDefinition<[u8; 20], &[u8]> = TableDefinition::new("metadata");
-pub const FINGERPRINTS_TABLE: TableDefinition<[u8; 20], [u8; 24]> =
-    TableDefinition::new("fingerprints");
 pub static UUID_NAMESPACE: OnceLock<Uuid> = OnceLock::new();
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -22,6 +20,7 @@ pub struct MetadataEntry {
     pub parent_hash: Option<[u8; 32]>,
     pub current_hash: [u8; 32],
     pub is_text_file: bool,
+    pub fingerprint: [u8; 24],
 }
 
 pub fn uuid_namespace() -> &'static Uuid {
@@ -64,13 +63,10 @@ pub fn store_file(file_path: &str, branch_id: u32) -> Result<(), VerError> {
     let redb = Database::open(&resolved.join(REDB_PATH))?;
     let blobdb = init_blobs_db(&resolved)?;
 
-    // compute hash
-    let content = fs::read(file_path)?;
-    let hash = blake3::hash(&content).as_bytes().to_owned();
-
     // get file and entry ID
     let file_id = get_file_id(file_path);
     let entry_id = make_entry_id(file_id, branch_id);
+    let fingerprint = get_file_fingerprint(file_path)?;
 
     // see if entry already exists
     let tx = redb.begin_read()?;
@@ -81,11 +77,19 @@ pub fn store_file(file_path: &str, branch_id: u32) -> Result<(), VerError> {
     // exists
     if let Some(entry) = maybe_entry {
         let mut e: MetadataEntry = postcard::from_bytes(entry.value())?;
-        if e.current_hash == hash {
+        if e.fingerprint == fingerprint {
+            return Ok(());
+        }
+
+        let content = fs::read(file_path)?;
+        let hash = blake3::hash(&content).as_bytes().to_owned();
+
+        if e.current_hash != hash {
             // error in the fingerprint-based
             // change detection
             return Ok(());
         }
+
         let buf = &content[..8192];
         let is_text = if buf.contains(&0) {
             false
@@ -95,6 +99,7 @@ pub fn store_file(file_path: &str, branch_id: u32) -> Result<(), VerError> {
         e.parent_hash = Some(e.current_hash);
         e.current_hash = hash;
         e.is_text_file = is_text;
+        e.fingerprint = fingerprint;
         let compressed: AllocVec<u8> = postcard::to_allocvec(&e)?;
 
         // insert metadata
@@ -111,6 +116,10 @@ pub fn store_file(file_path: &str, branch_id: u32) -> Result<(), VerError> {
         return Ok(());
     }
 
+    // compute hash
+    let content = fs::read(file_path)?;
+    let hash = blake3::hash(&content).as_bytes().to_owned();
+
     // get details (is_text_file, fingerprint) since they do
     // not already exist
     let buf = &content[..8192];
@@ -125,6 +134,7 @@ pub fn store_file(file_path: &str, branch_id: u32) -> Result<(), VerError> {
         parent_hash: None,
         current_hash: hash,
         is_text_file: is_text,
+        fingerprint,
     };
     let compressed: AllocVec<u8> = postcard::to_allocvec(&entry)?;
 

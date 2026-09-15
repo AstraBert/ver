@@ -13,3 +13,4 @@ postcard = { version = "1.1", features = ["alloc"] }
 redb = "4.2"
 rocksdb = "0.25"
 memoize = "0.6.0"
+clap = { version = "4.6.7", features = ["derive"] }
