@@ -1,10 +1,10 @@
 use redb::{Database, ReadableDatabase, ReadableTableMetadata};
-use std::{env, fs, path::Path};
+use std::{env, fs};
 
 use crate::{
     commons::resolve_ver_dir_path,
     errors::VerError,
-    init::{BRANCHES_TABLE, CURRENT_BRANCH_FILE, REDB_PATH, VER_DIRECTORY},
+    init::{BRANCHES_TABLE, CURRENT_BRANCH_FILE, REDB_PATH},
 };
 
 pub fn get_current_branch() -> Result<String, VerError> {
@@ -28,7 +28,7 @@ pub fn get_branch_id(branch: &str) -> Result<u32, VerError> {
     Err("No branch ID associated with this branch".into())
 }
 
-pub fn switch_branch(branch_name: &str) -> Result<(), VerError> {
+pub fn create_branch(branch_name: &str) -> Result<(), VerError> {
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
     let db = Database::open(resolved.join(REDB_PATH))?;

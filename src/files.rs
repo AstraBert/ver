@@ -1,4 +1,4 @@
-use redb::{Database, ReadableDatabase, TableDefinition};
+use redb::{Database, ReadableDatabase, TableDefinition, TableError};
 use serde::{Deserialize, Serialize};
 use std::{env, fs, io, path::Path, sync::OnceLock, time::UNIX_EPOCH};
 use uuid::Uuid;
@@ -70,8 +70,14 @@ pub fn store_file(file_path: &str, branch_id: u32) -> Result<(), VerError> {
 
     // see if entry already exists
     let tx = redb.begin_read()?;
-    let table = tx.open_table(METADATA_TABLE)?;
-    let maybe_entry = table.get(entry_id)?;
+    let res = tx.open_table(METADATA_TABLE);
+    let maybe_entry = match res {
+        Ok(table) => table.get(entry_id)?,
+        Err(e) => match e {
+            TableError::TableDoesNotExist(_) => None,
+            _ => return Err(e.into()),
+        },
+    };
 
     // modify entry if it already
     // exists
@@ -122,7 +128,11 @@ pub fn store_file(file_path: &str, branch_id: u32) -> Result<(), VerError> {
 
     // get details (is_text_file, fingerprint) since they do
     // not already exist
-    let buf = &content[..8192];
+    let buf = if content.len() >= 8192 {
+        &content[..8192]
+    } else {
+        &content
+    };
     let is_text = if buf.contains(&0) {
         false
     } else {
@@ -151,17 +161,25 @@ pub fn store_file(file_path: &str, branch_id: u32) -> Result<(), VerError> {
     Ok(())
 }
 
-pub fn add(paths: Vec<&str>) -> Result<(), VerError> {
+fn normalize_path(path: &str) -> io::Result<String> {
+    let normalized = path.replace("\\", "/");
+    let fp = Path::new(&normalized);
+    let can = fp.canonicalize()?;
+    return Ok(can.to_string_lossy().to_string());
+}
+
+pub fn add<S: AsRef<str>>(paths: Vec<S>) -> Result<(), VerError> {
     // get branch ID
     let branch = get_current_branch()?;
     let branch_id = get_branch_id(&branch)?;
 
     for p in paths {
-        let fp = Path::new(p);
+        let norm = normalize_path(p.as_ref())?;
+        let fp = Path::new(&norm);
         if fp.is_file() {
-            store_file(p, branch_id)?;
+            store_file(&norm, branch_id)?;
         } else {
-            let walker = ignore::WalkBuilder::new(p)
+            let walker = ignore::WalkBuilder::new(fp)
                 .add_custom_ignore_filename(".verignore")
                 .filter_entry(|d| {
                     if d.path().is_file() {
@@ -188,7 +206,8 @@ pub fn add(paths: Vec<&str>) -> Result<(), VerError> {
             for entry in walker {
                 let entry = entry?;
                 if entry.path().is_file() {
-                    store_file(&entry.path().to_string_lossy().to_string(), branch_id)?;
+                    let p = normalize_path(&entry.path().to_string_lossy().to_string())?;
+                    store_file(&p, branch_id)?;
                 }
             }
         }

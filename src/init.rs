@@ -25,13 +25,13 @@ pub fn init_blobs_db(base_path: &Path) -> Result<DB, RocksDBError> {
     opts.set_blob_compression_type(rocksdb::DBCompressionType::Zstd);
     opts.set_enable_blob_gc(true); // reclaim space from stale blobs during compaction
 
-    let db = DB::open(&opts, base_path.join(VER_DIRECTORY).join(BLOBDB_PATH))?;
+    let db = DB::open(&opts, base_path.join(BLOBDB_PATH))?;
 
     Ok(db)
 }
 
 pub fn create_redb(base_path: &Path) -> Result<Database, RedbError> {
-    let db = Database::create(base_path.join(VER_DIRECTORY).join(REDB_PATH))?;
+    let db = Database::create(base_path.join(REDB_PATH))?;
 
     Ok(db)
 }
@@ -41,8 +41,8 @@ pub fn initialize(directory: Option<&str>) -> Result<(), VerError> {
         env::current_dir().expect("Could not infer the current directory"),
         |d| PathBuf::from(d),
     );
-    let _ = init_blobs_db(&init_dir)?;
-    let db = create_redb(&init_dir)?;
+    let _ = init_blobs_db(&init_dir.join(VER_DIRECTORY))?;
+    let db = create_redb(&init_dir.join(VER_DIRECTORY))?;
     fs::write(
         &init_dir.join(VER_DIRECTORY).join(CURRENT_BRANCH_FILE),
         BASE_BRANCH,
