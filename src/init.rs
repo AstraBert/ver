@@ -54,5 +54,7 @@ pub fn initialize(directory: Option<&str>) -> Result<(), VerError> {
     }
     txn.commit()?;
 
+    println!("ver repository successfully initialized");
+
     Ok(())
 }

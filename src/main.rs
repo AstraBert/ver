@@ -6,7 +6,7 @@ mod init;
 
 use clap::{Parser, Subcommand};
 
-use crate::{branches::create_branch, files::add, init::initialize};
+use crate::{branches::create_branch, init::initialize};
 
 #[derive(Debug, Subcommand)]
 enum BranchCommands {
@@ -52,7 +52,10 @@ fn main() -> Result<(), errors::VerError> {
     let args = Args::parse();
 
     match args.cmd {
-        Commands::Add { paths } => add(paths),
+        Commands::Add { paths: _ } => {
+            println!("Unsupported");
+            Ok(())
+        }
         Commands::Init { directory } => initialize(directory.as_deref()),
         Commands::Branch { branchcmd } => match branchcmd {
             BranchCommands::New { branch_name } => create_branch(&branch_name),
