@@ -3,10 +3,16 @@ mod commons;
 mod errors;
 mod files;
 mod init;
+mod log;
 
 use clap::{Parser, Subcommand};
 
-use crate::{branches::create_branch, files::add, init::initialize};
+use crate::{
+    branches::create_branch,
+    files::{goto, snap},
+    init::initialize,
+    log::log,
+};
 
 #[derive(Debug, Subcommand)]
 enum BranchCommands {
@@ -28,11 +34,30 @@ enum Commands {
         directory: Option<String>,
     },
 
-    /// Add current changes to ver's database
-    Add {
+    /// Create a snapshot of the current state
+    /// of the repository
+    Snap {
         /// Path to the files and folders whose
-        /// changes you want to include
+        /// snapshots you want to be taken
         paths: Vec<String>,
+        /// Snapshot description
+        #[arg(long, short)]
+        description: String,
+    },
+
+    /// Revert to the state of the repository
+    /// at a specific snapshot ID
+    Goto {
+        /// ID of the snapshot to revert to
+        snapshot_id: String,
+    },
+
+    /// Show the snapshot history
+    /// up until now
+    Log {
+        /// Show the last N snapshots
+        #[arg(long)]
+        head: Option<usize>,
     },
 
     /// Branch-related commands
@@ -52,10 +77,12 @@ fn main() -> Result<(), errors::VerError> {
     let args = Args::parse();
 
     match args.cmd {
-        Commands::Add { paths } => add(paths),
+        Commands::Snap { paths, description } => snap(paths, &description),
         Commands::Init { directory } => initialize(directory.as_deref()),
         Commands::Branch { branchcmd } => match branchcmd {
             BranchCommands::New { branch_name } => create_branch(&branch_name),
         },
+        Commands::Log { head } => log(head),
+        Commands::Goto { snapshot_id } => goto(&snapshot_id),
     }
 }

@@ -10,6 +10,7 @@ use crate::errors::VerError;
 
 pub const VER_DIRECTORY: &str = ".ver";
 pub const CURRENT_BRANCH_FILE: &str = "current_branch";
+pub const SNAPSHOT_HISTORY_FILE: &str = "snapshot_history";
 pub const REDB_PATH: &str = "files.redb";
 pub const BLOBDB_PATH: &str = "blobs.db";
 pub const BASE_BRANCH: &str = "main";
@@ -47,12 +48,18 @@ pub fn initialize(directory: Option<&str>) -> Result<(), VerError> {
         &init_dir.join(VER_DIRECTORY).join(CURRENT_BRANCH_FILE),
         BASE_BRANCH,
     )?;
+    fs::write(
+        &init_dir.join(VER_DIRECTORY).join(SNAPSHOT_HISTORY_FILE),
+        "",
+    )?;
     let txn = db.begin_write()?;
     {
         let mut table = txn.open_table(BRANCHES_TABLE)?;
         table.insert(BASE_BRANCH, 0)?;
     }
     txn.commit()?;
+
+    println!("ver repository successfully initialized");
 
     Ok(())
 }
