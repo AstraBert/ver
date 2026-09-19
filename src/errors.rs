@@ -48,6 +48,12 @@ impl From<&str> for VerError {
     }
 }
 
+impl From<String> for VerError {
+    fn from(value: String) -> Self {
+        Self { message: value }
+    }
+}
+
 impl From<DatabaseError> for VerError {
     fn from(value: DatabaseError) -> Self {
         Self {
@@ -123,6 +129,23 @@ impl From<IgnoreError> for VerError {
     fn from(value: IgnoreError) -> Self {
         Self {
             message: format!("Error while walking the directory recursively: {}", value),
+        }
+    }
+}
+
+impl From<std::fmt::Error> for VerError {
+    fn from(value: std::fmt::Error) -> Self {
+        Self {
+            message: format!("Formatting error: {}", value),
+        }
+    }
+}
+
+#[cfg(feature = "minus")]
+impl From<minus::MinusError> for VerError {
+    fn from(value: minus::MinusError) -> Self {
+        Self {
+            message: format!("Error while displaying the snapshot history: {}", value),
         }
     }
 }
