@@ -77,10 +77,7 @@ impl From<DatabaseError> for VerError {
 impl From<TransactionError> for VerError {
     fn from(value: TransactionError) -> Self {
         Self {
-            message: format!(
-                "An error occurred while creating a redb write transaction: {}",
-                value
-            ),
+            message: format!("An error occurred with a redb transaction: {}", value),
         }
     }
 }

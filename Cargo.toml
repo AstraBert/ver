@@ -21,3 +21,6 @@ chrono = "0.4.45"
 
 [features]
 minus = ["dep:minus"]
+
+[dev-dependencies]
+tempdir = "0.3.7"

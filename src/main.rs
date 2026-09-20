@@ -43,7 +43,7 @@ enum Commands {
     /// Show the snapshot history
     /// up until now
     Log {
-        /// Show the last N snapshots
+        /// Show only the last N snapshots
         #[arg(long)]
         head: Option<usize>,
     },

@@ -64,6 +64,8 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
         },
     };
 
+    rx.close()?;
+
     let snapshot = Snapshot {
         parent_id,
         repository_state: repo_state,
@@ -195,16 +197,21 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
             }
         } else {
             let repo = &*resolved.parent().unwrap().to_string_lossy();
-            let files = collect_files(&[repo])?;
-            goto(
-                snapshot_id,
-                Some(
-                    files
-                        .iter()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .collect(),
-                ),
-            )?;
+            let ps = collect_files(&[repo])?;
+            for p in ps {
+                let str_p = &*p.to_string_lossy();
+                if let Some(f) = decompressed.repository_state.get(str_p) {
+                    let opt = blobdb.get(f)?;
+                    if let Some(content) = opt {
+                        fs::write(str_p, content)?;
+                    } else {
+                        eprintln!("Could not find snapshotted content for: {}", str_p);
+                    }
+                } else {
+                    // not in snapshot, so delete
+                    fs::remove_file(str_p)?;
+                }
+            }
         }
 
         return Ok(());
