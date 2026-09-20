@@ -1,3 +1,4 @@
+use blake3::HexError;
 use ignore::Error as IgnoreError;
 use postcard::Error as PostcardError;
 use redb::{
@@ -20,6 +21,14 @@ impl Display for VerError {
 }
 
 impl Error for VerError {}
+
+impl From<HexError> for VerError {
+    fn from(value: HexError) -> Self {
+        Self {
+            message: format!("Invalid snapshot ID: {}", value),
+        }
+    }
+}
 
 impl From<RocksdbError> for VerError {
     fn from(value: RocksdbError) -> Self {

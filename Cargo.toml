@@ -2,11 +2,13 @@
 name = "ver"
 version = "0.1.0-alpha"
 edition = "2024"
+readme = "README.md"
+description = "An intuitive, easy-to-use and non git-like version control system."
+license = "MIT"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1", features = ["v4", "v5"] }
 ignore = "0.4.25"
 blake3 = "1.8"
 postcard = { version = "1.1", features = ["alloc"] }
