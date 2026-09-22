@@ -3,6 +3,7 @@ mod errors;
 mod files;
 mod init;
 mod log;
+mod named;
 
 use clap::{Parser, Subcommand};
 
@@ -25,14 +26,18 @@ enum Commands {
     /// Create a snapshot of the current state
     /// of the repository
     Snap {
+        /// Name of the snapshot, as a shorthand
+        /// to revert to it
+        name: String,
         /// Snapshot description
-        description: String,
+        #[arg(long, short, default_value = None)]
+        description: Option<String>,
     },
 
     /// Revert to the state of the repository
     /// at a specific snapshot ID
     Goto {
-        /// ID of the snapshot to revert to
+        /// ID (or name) of the snapshot to revert to
         snapshot_id: String,
         /// Path to the files and folders
         /// you want to revert to `snapshot_id`.
@@ -59,7 +64,7 @@ fn main() -> Result<(), errors::VerError> {
     let args = Args::parse();
 
     match args.cmd {
-        Commands::Snap { description } => snap(&description),
+        Commands::Snap { name, description } => snap(&name, description.as_deref()),
         Commands::Init { directory } => initialize(directory.as_deref()),
         Commands::Log { head } => log(head),
         Commands::Goto { snapshot_id, paths } => goto(&snapshot_id, paths),

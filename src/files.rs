@@ -14,6 +14,7 @@ use crate::{
     commons::resolve_ver_dir_path,
     errors::VerError,
     init::{REDB_PATH, SNAPSHOT_HISTORY_FILE, init_blobs_db},
+    named::{get_snapshot_by_name, name_snapshot},
 };
 
 pub const SNAPSHOT_TABLE: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("snapshots");
@@ -131,7 +132,7 @@ fn collect_files<S: AsRef<str>>(paths: &[S]) -> Result<Vec<PathBuf>, VerError> {
     Ok(collected)
 }
 
-pub fn snap(message: &str) -> Result<(), VerError> {
+pub fn snap(name: &str, message: Option<&str>) -> Result<(), VerError> {
     let (snapshot_id, snapshot) = store_files()?;
 
     let current_dir = env::current_dir()?;
@@ -152,11 +153,17 @@ pub fn snap(message: &str) -> Result<(), VerError> {
         .open(resolved.join(SNAPSHOT_HISTORY_FILE))?;
     writeln!(
         fl,
-        "({}) {}: {}",
+        "{} - {} ({}){}",
         chrono::Utc::now().format("%d/%m/%Y %H:%M:%S"),
+        name,
         snapshot_id,
-        message.replace("\n", " ").replace("\t", " ")
+        message.map_or("".to_string(), |m| format!(
+            ": {}",
+            m.replace("\n", " ").replace("\t", " ")
+        ))
     )?;
+
+    name_snapshot(&redb, snapshot_id.as_bytes().to_owned(), name)?;
 
     println!("Saved current snapshot under: {}\n", snapshot_id);
 
@@ -170,7 +177,12 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
     let redb = Database::open(&resolved.join(REDB_PATH))?;
     let blobdb = init_blobs_db(&resolved)?;
 
-    let hash = blake3::Hash::from_str(snapshot_id)?.as_bytes().to_owned();
+    let maybe_hash = blake3::Hash::from_str(snapshot_id);
+
+    let hash = match maybe_hash {
+        Ok(h) => h.as_bytes().to_owned(),
+        Err(_) => get_snapshot_by_name(&redb, snapshot_id)?,
+    };
 
     let tx = redb.begin_read()?;
     let table = tx.open_table(SNAPSHOT_TABLE)?;
