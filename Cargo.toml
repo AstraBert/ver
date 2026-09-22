@@ -24,3 +24,4 @@ minus = ["dep:minus"]
 
 [dev-dependencies]
 tempdir = "0.3.7"
+serial_test = "3"

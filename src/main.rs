@@ -1,13 +1,7 @@
-mod commons;
-mod errors;
-mod files;
-mod init;
-mod log;
-mod named;
-
 use clap::{Parser, Subcommand};
 
-use crate::{
+use ver::{
+    errors::VerError,
     files::{goto, snap},
     init::initialize,
     log::log,
@@ -60,7 +54,7 @@ struct Args {
     cmd: Commands,
 }
 
-fn main() -> Result<(), errors::VerError> {
+fn main() -> Result<(), VerError> {
     let args = Args::parse();
 
     match args.cmd {
