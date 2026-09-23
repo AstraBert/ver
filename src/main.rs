@@ -5,6 +5,7 @@ use ver::{
     files::{goto, snap},
     init::initialize,
     log::log,
+    whomai::whoami,
 };
 
 #[derive(Debug, Subcommand)]
@@ -46,6 +47,10 @@ enum Commands {
         #[arg(long)]
         head: Option<usize>,
     },
+
+    /// Show currently logged in
+    /// user and their information
+    Whoami {},
 }
 
 #[derive(Debug, Parser)]
@@ -62,5 +67,6 @@ fn main() -> Result<(), VerError> {
         Commands::Init { directory } => initialize(directory.as_deref()),
         Commands::Log { head } => log(head),
         Commands::Goto { snapshot_id, paths } => goto(&snapshot_id, paths),
+        Commands::Whoami {} => whoami(),
     }
 }
