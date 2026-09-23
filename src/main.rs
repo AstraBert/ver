@@ -1,16 +1,11 @@
-mod commons;
-mod errors;
-mod files;
-mod init;
-mod log;
-mod named;
-
 use clap::{Parser, Subcommand};
 
-use crate::{
+use ver::{
+    errors::VerError,
     files::{goto, snap},
     init::initialize,
     log::log,
+    whomai::whoami,
 };
 
 #[derive(Debug, Subcommand)]
@@ -52,6 +47,10 @@ enum Commands {
         #[arg(long)]
         head: Option<usize>,
     },
+
+    /// Show currently logged in
+    /// user and their information
+    Whoami {},
 }
 
 #[derive(Debug, Parser)]
@@ -60,7 +59,7 @@ struct Args {
     cmd: Commands,
 }
 
-fn main() -> Result<(), errors::VerError> {
+fn main() -> Result<(), VerError> {
     let args = Args::parse();
 
     match args.cmd {
@@ -68,5 +67,6 @@ fn main() -> Result<(), errors::VerError> {
         Commands::Init { directory } => initialize(directory.as_deref()),
         Commands::Log { head } => log(head),
         Commands::Goto { snapshot_id, paths } => goto(&snapshot_id, paths),
+        Commands::Whoami {} => whoami(),
     }
 }
