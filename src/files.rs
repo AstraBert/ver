@@ -21,7 +21,7 @@ pub const SNAPSHOT_TABLE: TableDefinition<[u8; 32], &[u8]> = TableDefinition::ne
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Snapshot {
-    pub parent_id: Option<[u8; 32]>,
+    pub parent_id: Vec<[u8; 32]>,
     pub repository_state: HashMap<String, [u8; 32]>,
 }
 
@@ -54,13 +54,13 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
         Ok(table) => {
             let last = table.last()?;
             if let Some(l) = last {
-                Some(l.0.value())
+                vec![l.0.value()]
             } else {
-                None
+                vec![]
             }
         }
         Err(e) => match e {
-            TableError::TableDoesNotExist(_) => None,
+            TableError::TableDoesNotExist(_) => vec![],
             _ => return Err(e.into()),
         },
     };

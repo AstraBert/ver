@@ -1,11 +1,11 @@
 use clap::{Parser, Subcommand};
 
 use ver::{
+    cp::copy as ver_copy,
     errors::VerError,
     files::{goto, snap},
     init::initialize,
     log::log,
-    whomai::whoami,
 };
 
 #[derive(Debug, Subcommand)]
@@ -48,9 +48,18 @@ enum Commands {
         head: Option<usize>,
     },
 
-    /// Show currently logged in
-    /// user and their information
-    Whoami {},
+    /// Create a copy
+    /// of the current ver repository
+    /// from a specific snapshot
+    Cp {
+        /// Snapshot ID or name
+        snapshot_id: String,
+        /// Destination where to copy
+        /// the repository. Will be
+        /// created if it does not
+        /// already exists
+        destination: String,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -67,6 +76,9 @@ fn main() -> Result<(), VerError> {
         Commands::Init { directory } => initialize(directory.as_deref()),
         Commands::Log { head } => log(head),
         Commands::Goto { snapshot_id, paths } => goto(&snapshot_id, paths),
-        Commands::Whoami {} => whoami(),
+        Commands::Cp {
+            snapshot_id,
+            destination,
+        } => ver_copy(&snapshot_id, &destination),
     }
 }
