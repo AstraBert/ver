@@ -21,7 +21,6 @@ pub fn copy(snapshot_id: &str, destination: &str) -> Result<(), VerError> {
     // open databases
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
-    let repo = resolved.parent().unwrap();
     let redb = Database::open(&resolved.join(REDB_PATH))?;
     let blobdb = init_blobs_db(&resolved)?;
 
@@ -41,9 +40,7 @@ pub fn copy(snapshot_id: &str, destination: &str) -> Result<(), VerError> {
         let mut copied = decompressed.repository_state.len();
 
         for (k, v) in decompressed.repository_state {
-            let relative = Path::new(&k)
-                .strip_prefix(repo)
-                .expect("Repository should always be parent of its files");
+            let relative = Path::new(&k);
 
             let par = relative.parent();
             if let Some(parent) = par

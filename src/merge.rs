@@ -10,7 +10,7 @@ use redb::{Database, ReadOnlyTable, ReadableDatabase, ReadableTable, TableDefini
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    commons::resolve_ver_dir_path,
+    commons::{resolve_ver_dir_path, to_text},
     errors::VerError,
     files::{SNAPSHOT_TABLE, Snapshot},
     init::{BLOBDB_PATH, REDB_PATH, SNAPSHOT_HISTORY_FILE, VER_DIRECTORY, init_blobs_db},
@@ -69,19 +69,6 @@ impl<'a> From<PartialMergeInner<'a>> for PartialMerge<'a> {
                 .map(|(s, h1, h2, c)| (*s, h1.as_slice(), h2.as_slice(), c.to_owned()))
                 .collect(),
         }
-    }
-}
-
-fn to_text<'a>(content: &'a [u8]) -> Option<&'a str> {
-    let buf = if content.len() > 8192 {
-        &content[..8192]
-    } else {
-        content
-    };
-    if buf.contains(&0) {
-        None
-    } else {
-        std::str::from_utf8(buf).ok()
     }
 }
 

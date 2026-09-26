@@ -7,6 +7,7 @@ use ver::{
     init::initialize,
     log::log,
     merge::merge_run,
+    show::show_file,
 };
 
 #[derive(Debug, Subcommand)]
@@ -88,9 +89,34 @@ enum Commands {
         destination: String,
     },
 
+    /// Merge-related sub-commands
     Merge {
         #[command(subcommand)]
         merge_cmd: MergeCommands,
+    },
+
+    /// Show the content of a file,
+    /// providing its relative path
+    /// and (optionally) the snapshot
+    /// ID or name
+    Show {
+        /// Path to the file
+        /// whose content you
+        /// want to show
+        path: String,
+        /// ID or name of the
+        /// snapshot that
+        /// holds the content
+        /// of the file
+        #[arg(long, short, default_value = None)]
+        snapshot_id: Option<String>,
+        /// Offset (in bytes) for the file's content
+        #[arg(long, short, default_value = None)]
+        offset: Option<usize>,
+        /// Maximum number of bytes to show,
+        /// starting from the offset
+        #[arg(long, short, default_value = None)]
+        limit: Option<usize>,
     },
 }
 
@@ -112,6 +138,12 @@ fn main() -> Result<(), VerError> {
             snapshot_id,
             destination,
         } => ver_copy(&snapshot_id, &destination),
+        Commands::Show {
+            path,
+            snapshot_id,
+            offset,
+            limit,
+        } => show_file(&path, snapshot_id, offset, limit),
         Commands::Merge { merge_cmd } => match merge_cmd {
             MergeCommands::Run {
                 name,

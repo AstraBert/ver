@@ -41,7 +41,15 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
         let content = fs::read(&f)?;
         let hash = blake3::hash(&content).as_bytes().to_owned();
 
-        repo_state.insert(f.to_string_lossy().to_string(), hash);
+        let rel = f
+            .strip_prefix(repo)
+            .expect("Repository should always be parent to its files");
+
+        // store the relative path
+        // so on merges we can compare
+        // with other copies
+        // of the same repo
+        repo_state.insert(rel.to_string_lossy().to_string(), hash);
 
         // insert in blob db
         blobdb.put(hash, content)?;
