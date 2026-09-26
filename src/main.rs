@@ -6,7 +6,34 @@ use ver::{
     files::{goto, snap},
     init::initialize,
     log::log,
+    merge::merge_run,
 };
+
+#[derive(Debug, Subcommand)]
+enum MergeCommands {
+    /// Run a merge between the
+    /// current ver repository
+    /// and another repository,
+    /// starting from their latest snapshot
+    /// ID or from a provided ID/name.
+    Run {
+        /// Name of this
+        /// merge run
+        name: String,
+        /// Repository the incoming
+        /// merge is from
+        #[arg(short, long)]
+        from: String,
+        /// Snapshot ID or name
+        /// from the current repository
+        #[arg(short, long, default_value = None)]
+        our_snapshot: Option<String>,
+        /// Snapshot ID or name
+        /// for the incoming merge
+        #[arg(short, long, default_value = None)]
+        their_snapshot: Option<String>,
+    },
+}
 
 #[derive(Debug, Subcommand)]
 enum Commands {
@@ -60,6 +87,11 @@ enum Commands {
         /// already exists
         destination: String,
     },
+
+    Merge {
+        #[command(subcommand)]
+        merge_cmd: MergeCommands,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -80,5 +112,13 @@ fn main() -> Result<(), VerError> {
             snapshot_id,
             destination,
         } => ver_copy(&snapshot_id, &destination),
+        Commands::Merge { merge_cmd } => match merge_cmd {
+            MergeCommands::Run {
+                name,
+                from,
+                our_snapshot,
+                their_snapshot,
+            } => merge_run(from.into(), &name, our_snapshot, their_snapshot),
+        },
     }
 }

@@ -21,7 +21,7 @@ pub const SNAPSHOT_TABLE: TableDefinition<[u8; 32], &[u8]> = TableDefinition::ne
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Snapshot {
-    pub parent_id: Vec<[u8; 32]>,
+    pub parent_ids: Vec<[u8; 32]>,
     pub repository_state: HashMap<String, [u8; 32]>,
 }
 
@@ -50,7 +50,7 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
     let rx = redb.begin_read()?;
     let snap_tab = rx.open_table(SNAPSHOT_TABLE);
 
-    let parent_id = match snap_tab {
+    let parent_ids = match snap_tab {
         Ok(table) => {
             let last = table.last()?;
             if let Some(l) = last {
@@ -68,7 +68,7 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
     rx.close()?;
 
     let snapshot = Snapshot {
-        parent_id,
+        parent_ids,
         repository_state: repo_state,
     };
 
