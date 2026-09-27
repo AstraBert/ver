@@ -18,3 +18,16 @@ pub fn resolve_ver_dir_path(current_dir: PathBuf) -> Result<PathBuf, VerError> {
 
     Err("Could not find a .ver folder in the current directory or in any of its ancestors".into())
 }
+
+pub fn to_text<'a>(content: &'a [u8]) -> Option<&'a str> {
+    let buf = if content.len() > 8192 {
+        &content[..8192]
+    } else {
+        content
+    };
+    if buf.contains(&0) {
+        None
+    } else {
+        std::str::from_utf8(buf).ok()
+    }
+}

@@ -21,7 +21,7 @@ pub const SNAPSHOT_TABLE: TableDefinition<[u8; 32], &[u8]> = TableDefinition::ne
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Snapshot {
-    pub parent_id: Vec<[u8; 32]>,
+    pub parent_ids: Vec<[u8; 32]>,
     pub repository_state: HashMap<String, [u8; 32]>,
 }
 
@@ -41,7 +41,15 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
         let content = fs::read(&f)?;
         let hash = blake3::hash(&content).as_bytes().to_owned();
 
-        repo_state.insert(f.to_string_lossy().to_string(), hash);
+        let rel = f
+            .strip_prefix(repo)
+            .expect("Repository should always be parent to its files");
+
+        // store the relative path
+        // so on merges we can compare
+        // with other copies
+        // of the same repo
+        repo_state.insert(rel.to_string_lossy().to_string(), hash);
 
         // insert in blob db
         blobdb.put(hash, content)?;
@@ -50,7 +58,7 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
     let rx = redb.begin_read()?;
     let snap_tab = rx.open_table(SNAPSHOT_TABLE);
 
-    let parent_id = match snap_tab {
+    let parent_ids = match snap_tab {
         Ok(table) => {
             let last = table.last()?;
             if let Some(l) = last {
@@ -68,7 +76,7 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
     rx.close()?;
 
     let snapshot = Snapshot {
-        parent_id,
+        parent_ids,
         repository_state: repo_state,
     };
 
@@ -174,6 +182,7 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
     // open databases
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
+    let repo = resolved.parent().unwrap();
     let redb = Database::open(&resolved.join(REDB_PATH))?;
     let blobdb = init_blobs_db(&resolved)?;
 
@@ -194,34 +203,39 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
         if let Some(ref pas) = paths {
             let ps = collect_files(pas)?;
             for p in ps {
-                let str_p = &*p.to_string_lossy();
+                let rel = p
+                    .strip_prefix(repo)
+                    .expect("Repository should always contain its files");
+                let str_p = &*rel.to_string_lossy();
                 if let Some(f) = decompressed.repository_state.get(str_p) {
                     let opt = blobdb.get(f)?;
                     if let Some(content) = opt {
-                        fs::write(str_p, content)?;
+                        fs::write(p, content)?;
                     } else {
                         eprintln!("Could not find snapshotted content for: {}", str_p);
                     }
                 } else {
                     // not in snapshot, so delete
-                    fs::remove_file(str_p)?;
+                    fs::remove_file(p)?;
                 }
             }
         } else {
-            let repo = &*resolved.parent().unwrap().to_string_lossy();
-            let ps = collect_files(&[repo])?;
+            let ps = collect_files(&[&*repo.to_string_lossy()])?;
             for p in ps {
-                let str_p = &*p.to_string_lossy();
+                let rel = p
+                    .strip_prefix(repo)
+                    .expect("Repository should always contain its files");
+                let str_p = &*rel.to_string_lossy();
                 if let Some(f) = decompressed.repository_state.get(str_p) {
                     let opt = blobdb.get(f)?;
                     if let Some(content) = opt {
-                        fs::write(str_p, content)?;
+                        fs::write(p, content)?;
                     } else {
                         eprintln!("Could not find snapshotted content for: {}", str_p);
                     }
                 } else {
                     // not in snapshot, so delete
-                    fs::remove_file(str_p)?;
+                    fs::remove_file(p)?;
                 }
             }
         }
