@@ -1,9 +1,9 @@
 use std::{env, str::FromStr};
 
-use redb::{Database, ReadableDatabase, ReadableTable};
+use redb::{Database, ReadableDatabase};
 
 use crate::{
-    commons::{resolve_ver_dir_path, to_text},
+    commons::{get_head, resolve_ver_dir_path, to_text},
     errors::VerError,
     files::{SNAPSHOT_TABLE, Snapshot},
     init::{REDB_PATH, init_blobs_db},
@@ -55,12 +55,18 @@ pub fn show_file(
             return Err(format!("Could not find snapshot associated with {}", sid).into());
         }
     } else {
-        let l = table.last()?;
+        let cur = get_head(&resolved)?;
 
-        if let Some((_, content)) = l {
+        if cur.is_none() {
+            return Err("No snapshot saved yet, nothing to show".into());
+        }
+
+        let l = table.get(cur.unwrap())?;
+
+        if let Some(content) = l {
             postcard::from_bytes(content.value())?
         } else {
-            return Err("Repository has not snapshots".into());
+            return Err("Head snapshot could not be found".into());
         }
     };
 

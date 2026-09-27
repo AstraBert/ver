@@ -8,7 +8,7 @@ use rocksdb::Error as RocksdbError;
 use std::{error::Error, fmt::Display, io};
 
 /// Internal error that abstracts errors from other
-/// sources
+/// crates
 #[derive(Debug, Clone)]
 pub struct VerError {
     pub message: String,

@@ -12,6 +12,7 @@ pub const VER_DIRECTORY: &str = ".ver";
 pub const SNAPSHOT_HISTORY_FILE: &str = "snapshot_history";
 pub const REDB_PATH: &str = "files.redb";
 pub const BLOBDB_PATH: &str = "blobs.db";
+pub const HEAD_PATH: &str = "head";
 
 pub fn init_blobs_db(base_path: &Path) -> Result<DB, RocksDBError> {
     let mut opts = Options::default();
@@ -45,6 +46,7 @@ pub fn initialize(directory: Option<&str>) -> Result<(), VerError> {
         &init_dir.join(VER_DIRECTORY).join(SNAPSHOT_HISTORY_FILE),
         "",
     )?;
+    fs::write(&init_dir.join(VER_DIRECTORY).join(HEAD_PATH), "")?;
 
     println!("ver repository successfully initialized");
 

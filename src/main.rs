@@ -47,11 +47,13 @@ enum MergeCommands {
         /// pick our conflicting
         /// version (can be used for
         /// multiple paths).
+        #[arg(short, long)]
         our: Vec<String>,
         /// For this path,
         /// pick their conflicting
         /// version (can be used for
         /// multiple paths).
+        #[arg(short, long)]
         their: Vec<String>,
     },
 
@@ -79,8 +81,7 @@ enum Commands {
     /// Create a snapshot of the current state
     /// of the repository
     Snap {
-        /// Name of the snapshot, as a shorthand
-        /// to revert to it
+        /// Name of the snapshot
         name: String,
         /// Snapshot description
         #[arg(long, short, default_value = None)]

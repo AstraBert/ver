@@ -1,4 +1,4 @@
-use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition, TableError};
+use redb::{Database, ReadableDatabase, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -11,7 +11,7 @@ extern crate alloc;
 use alloc::vec::Vec as AllocVec;
 
 use crate::{
-    commons::resolve_ver_dir_path,
+    commons::{get_head, resolve_ver_dir_path, write_head},
     errors::VerError,
     init::{REDB_PATH, SNAPSHOT_HISTORY_FILE, init_blobs_db},
     named::{get_snapshot_by_name, name_snapshot},
@@ -30,7 +30,6 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
     let repo = resolved.parent().unwrap();
-    let redb = Database::open(&resolved.join(REDB_PATH))?;
     let blobdb = init_blobs_db(&resolved)?;
 
     let files = collect_files(&[&*repo.to_string_lossy()])?;
@@ -55,25 +54,17 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
         blobdb.put(hash, content)?;
     }
 
-    let rx = redb.begin_read()?;
-    let snap_tab = rx.open_table(SNAPSHOT_TABLE);
+    let maybe_parent_id = get_head(&resolved)?;
 
-    let parent_ids = match snap_tab {
-        Ok(table) => {
-            let last = table.last()?;
-            if let Some(l) = last {
-                vec![l.0.value()]
-            } else {
-                vec![]
-            }
-        }
-        Err(e) => match e {
-            TableError::TableDoesNotExist(_) => vec![],
-            _ => return Err(e.into()),
-        },
+    // normal snapshot don't have more than
+    // one parents, so it is safe to read the
+    // parent snapshot from the head of the
+    // repository
+    let parent_ids = if let Some(parent_id) = maybe_parent_id {
+        vec![parent_id]
+    } else {
+        vec![]
     };
-
-    rx.close()?;
 
     let snapshot = Snapshot {
         parent_ids,
@@ -159,6 +150,8 @@ pub fn snap(name: &str, message: Option<&str>) -> Result<(), VerError> {
         .append(true)
         .create(true)
         .open(resolved.join(SNAPSHOT_HISTORY_FILE))?;
+
+    write_head(&resolved, &snapshot_id)?;
     writeln!(
         fl,
         "{} - {} ({}){}",
@@ -239,6 +232,8 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
                 }
             }
         }
+
+        write_head(&resolved, &blake3::Hash::from_bytes(hash))?;
 
         return Ok(());
     }

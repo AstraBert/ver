@@ -6,11 +6,11 @@ use std::{
     str::FromStr,
 };
 
-use redb::{Database, ReadOnlyTable, ReadableDatabase, ReadableTable, TableDefinition};
+use redb::{Database, ReadOnlyTable, ReadableDatabase, TableDefinition};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    commons::{resolve_ver_dir_path, to_text},
+    commons::{get_head, resolve_ver_dir_path, to_text, write_head},
     errors::VerError,
     files::{SNAPSHOT_TABLE, Snapshot},
     init::{REDB_PATH, SNAPSHOT_HISTORY_FILE, VER_DIRECTORY, init_blobs_db},
@@ -287,16 +287,8 @@ pub fn merge_run(
         (hash_cur, hash_inc)
     } else if snapshot_id_cur.is_none() && snapshot_id_inc.is_none() {
         (
-            table_a
-                .last()?
-                .expect("Should have at least one entry")
-                .0
-                .value(),
-            table_b
-                .last()?
-                .expect("Should have at least one entry")
-                .0
-                .value(),
+            get_head(&resolved)?.expect("Should have at least one entry"),
+            get_head(&other_repo.join(VER_DIRECTORY))?.expect("Should have at least one entry"),
         )
     } else if let Some(ref cur) = (snapshot_id_cur)
         && snapshot_id_inc.is_none()
@@ -309,11 +301,7 @@ pub fn merge_run(
         };
         (
             hash_cur,
-            table_b
-                .last()?
-                .expect("Should have at least one entry")
-                .0
-                .value(),
+            get_head(&other_repo.join(VER_DIRECTORY))?.expect("Should have at least one entry"),
         )
     } else {
         let inc = snapshot_id_inc.as_deref().unwrap();
@@ -324,11 +312,7 @@ pub fn merge_run(
             Err(_) => get_snapshot_by_name(&redb_b, &inc)?,
         };
         (
-            table_a
-                .last()?
-                .expect("Should have at least one entry")
-                .0
-                .value(),
+            get_head(&resolved)?.expect("Should have at least one entry"),
             hash_inc,
         )
     };
@@ -517,6 +501,8 @@ pub fn merge_run(
                 }
                 wtx.commit()?;
 
+                write_head(&resolved, &snap_hash)?;
+
                 let mut fl = fs::OpenOptions::new()
                     .append(true)
                     .create(true)
@@ -610,6 +596,8 @@ pub fn merge_run(
                     merge_table.insert(name, compressed.as_slice())?;
                 }
                 wtx.commit()?;
+
+                return Ok(());
             }
         }
 
@@ -640,10 +628,13 @@ pub fn merge_pick(name: &str, use_ours: &[&str], use_theirs: &[&str]) -> Result<
                 } else {
                     inner.deleted_paths.push(path);
                 }
+                inner.deleted_conflicting_paths.remove(path);
             } else if let Some(add) = inner.added_conflicting_paths.get(path) {
                 inner.clean_merge.push((path, add.0, true));
+                inner.added_conflicting_paths.remove(path);
             } else if let Some(modified) = inner.modified_conflicting_paths.get(path) {
                 inner.clean_merge.push((path, modified.0, true));
+                inner.modified_conflicting_paths.remove(path);
             } else {
                 eprintln!(
                     "Path {} does not appear to have any conflicts in merge {}",
@@ -658,10 +649,13 @@ pub fn merge_pick(name: &str, use_ours: &[&str], use_theirs: &[&str]) -> Result<
                 } else {
                     inner.deleted_paths.push(path);
                 }
+                inner.deleted_conflicting_paths.remove(path);
             } else if let Some(add) = inner.added_conflicting_paths.get(path) {
                 inner.clean_merge.push((path, add.1, false));
+                inner.added_conflicting_paths.remove(path);
             } else if let Some(modified) = inner.modified_conflicting_paths.get(path) {
                 inner.clean_merge.push((path, modified.1, false));
+                inner.modified_conflicting_paths.remove(path);
             } else {
                 eprintln!(
                     "Path {} does not appear to have any conflicts in merge {}",
@@ -677,6 +671,9 @@ pub fn merge_pick(name: &str, use_ours: &[&str], use_theirs: &[&str]) -> Result<
             tb.insert(name, new_compressed.as_slice())?;
         }
         wtx.commit()?;
+
+        println!("Successfully applied merge picks");
+        return Ok(());
     }
 
     Err(format!("Could not find partial merge under {}", name).into())
@@ -786,6 +783,8 @@ pub fn merge_end(name: &str) -> Result<(), VerError> {
             snap_table.insert(snap_hash.as_bytes().to_owned(), to_insert.as_slice())?;
         }
         wtx.commit()?;
+
+        write_head(&resolved, &snap_hash)?;
 
         let mut fl = fs::OpenOptions::new()
             .append(true)
