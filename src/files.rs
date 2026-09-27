@@ -182,6 +182,7 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
     // open databases
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
+    let repo = resolved.parent().unwrap();
     let redb = Database::open(&resolved.join(REDB_PATH))?;
     let blobdb = init_blobs_db(&resolved)?;
 
@@ -202,34 +203,39 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
         if let Some(ref pas) = paths {
             let ps = collect_files(pas)?;
             for p in ps {
-                let str_p = &*p.to_string_lossy();
+                let rel = p
+                    .strip_prefix(repo)
+                    .expect("Repository should always contain its files");
+                let str_p = &*rel.to_string_lossy();
                 if let Some(f) = decompressed.repository_state.get(str_p) {
                     let opt = blobdb.get(f)?;
                     if let Some(content) = opt {
-                        fs::write(str_p, content)?;
+                        fs::write(p, content)?;
                     } else {
                         eprintln!("Could not find snapshotted content for: {}", str_p);
                     }
                 } else {
                     // not in snapshot, so delete
-                    fs::remove_file(str_p)?;
+                    fs::remove_file(p)?;
                 }
             }
         } else {
-            let repo = &*resolved.parent().unwrap().to_string_lossy();
-            let ps = collect_files(&[repo])?;
+            let ps = collect_files(&[&*repo.to_string_lossy()])?;
             for p in ps {
-                let str_p = &*p.to_string_lossy();
+                let rel = p
+                    .strip_prefix(repo)
+                    .expect("Repository should always contain its files");
+                let str_p = &*rel.to_string_lossy();
                 if let Some(f) = decompressed.repository_state.get(str_p) {
                     let opt = blobdb.get(f)?;
                     if let Some(content) = opt {
-                        fs::write(str_p, content)?;
+                        fs::write(p, content)?;
                     } else {
                         eprintln!("Could not find snapshotted content for: {}", str_p);
                     }
                 } else {
                     // not in snapshot, so delete
-                    fs::remove_file(str_p)?;
+                    fs::remove_file(p)?;
                 }
             }
         }

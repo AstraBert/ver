@@ -6,7 +6,7 @@ use crate::{
     commons::{resolve_ver_dir_path, to_text},
     errors::VerError,
     files::{SNAPSHOT_TABLE, Snapshot},
-    init::{BLOBDB_PATH, REDB_PATH, init_blobs_db},
+    init::{REDB_PATH, init_blobs_db},
     named::get_snapshot_by_name,
 };
 
@@ -67,11 +67,11 @@ pub fn show_file(
     let path_hash = snap.repository_state.get(path);
 
     if let Some(ha) = path_hash {
-        let blobdb = init_blobs_db(&resolved.join(BLOBDB_PATH))?;
+        let blobdb = init_blobs_db(&resolved)?;
         let opt = blobdb.get(ha)?;
         if let Some(content) = opt {
             let offset = offset.unwrap_or_default();
-            let limit = content.len().max(limit.unwrap_or(content.len()));
+            let limit = content.len().min(limit.unwrap_or(content.len()));
             let new_cont = &content[offset..limit];
             if let Some(text) = to_text(&new_cont) {
                 println!("{}", text);
@@ -81,6 +81,8 @@ pub fn show_file(
                 );
                 hexdump(new_cont);
             }
+        } else {
+            return Err(format!("Could not find content of {} in blobsdb", path).into());
         }
 
         return Ok(());

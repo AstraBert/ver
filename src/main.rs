@@ -6,7 +6,7 @@ use ver::{
     files::{goto, snap},
     init::initialize,
     log::log,
-    merge::merge_run,
+    merge::{merge_end, merge_pick, merge_run},
     show::show_file,
 };
 
@@ -33,6 +33,36 @@ enum MergeCommands {
         /// for the incoming merge
         #[arg(short, long, default_value = None)]
         their_snapshot: Option<String>,
+    },
+
+    /// After resolving conflicts where possible,
+    /// pick a version of the conflicting
+    /// file (theirs or ours)
+    Pick {
+        /// Name of the merge
+        /// operation this pick
+        /// refers to
+        name: String,
+        /// For this path,
+        /// pick our conflicting
+        /// version (can be used for
+        /// multiple paths).
+        our: Vec<String>,
+        /// For this path,
+        /// pick their conflicting
+        /// version (can be used for
+        /// multiple paths).
+        their: Vec<String>,
+    },
+
+    /// After picking the
+    /// conflicting versions
+    /// for the merge, finalize
+    /// it
+    End {
+        /// Name of the merge
+        /// to finalize
+        name: String,
     },
 }
 
@@ -151,6 +181,19 @@ fn main() -> Result<(), VerError> {
                 our_snapshot,
                 their_snapshot,
             } => merge_run(from.into(), &name, our_snapshot, their_snapshot),
+            MergeCommands::Pick { name, our, their } => merge_pick(
+                &name,
+                our.iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<&str>>()
+                    .as_slice(),
+                &their
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<&str>>()
+                    .as_slice(),
+            ),
+            MergeCommands::End { name } => merge_end(&name),
         },
     }
 }
