@@ -1,4 +1,4 @@
-use std::{env, str::FromStr};
+use std::{env, io, str::FromStr};
 
 use redb::{Database, ReadableDatabase};
 
@@ -11,20 +11,24 @@ use crate::{
 };
 
 #[cfg(not(feature = "pretty-hex"))]
-fn hexdump(bytes: &[u8]) {
+fn hexdump(bytes: &[u8], mut out: impl io::Write) -> Result<(), VerError> {
     for chunk in bytes.chunks(16) {
         for b in chunk {
-            print!("{:02x} ", b);
+            write!(out, "{:02x} ", b)?;
         }
-        println!();
+        writeln!(out, "")?;
     }
+
+    Ok(())
 }
 
 #[cfg(feature = "pretty-hex")]
-fn hexdump(bytes: &[u8]) {
+fn hexdump(bytes: &[u8], mut out: impl io::Write) -> Result<(), VerError> {
     use pretty_hex::PrettyHex;
 
-    println!("{:?}", bytes.hex_dump());
+    writeln!(out, "{:?}", bytes.hex_dump())?;
+
+    Ok(())
 }
 
 pub fn show_file(
@@ -32,6 +36,7 @@ pub fn show_file(
     snapshot_id: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
+    mut out: impl io::Write,
 ) -> Result<(), VerError> {
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
@@ -80,12 +85,12 @@ pub fn show_file(
             let limit = content.len().min(limit.unwrap_or(content.len()));
             let new_cont = &content[offset..limit];
             if let Some(text) = to_text(&new_cont) {
-                println!("{}", text);
+                writeln!(out, "{}", text)?;
             } else {
                 eprintln!(
                     "WARNING: the requested file does not appear to be text-based, it will be hex-dumped"
                 );
-                hexdump(new_cont);
+                hexdump(new_cont, out)?;
             }
         } else {
             return Err(format!("Could not find content of {} in blobsdb", path).into());

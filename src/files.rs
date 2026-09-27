@@ -208,8 +208,16 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
                         eprintln!("Could not find snapshotted content for: {}", str_p);
                     }
                 } else {
-                    // not in snapshot, so delete
-                    fs::remove_file(p)?;
+                    // not in snapshot or does not exist, so try deleting
+                    // or skip if it does not exist
+                    let res = fs::remove_file(p);
+                    match res {
+                        Ok(_) => {}
+                        Err(e) => match e.kind() {
+                            io::ErrorKind::NotFound => continue,
+                            _ => return Err(e.into()),
+                        },
+                    }
                 }
             }
         } else {

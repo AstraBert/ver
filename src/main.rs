@@ -1,3 +1,5 @@
+use std::io;
+
 use clap::{Parser, Subcommand};
 
 use ver::{
@@ -163,7 +165,11 @@ fn main() -> Result<(), VerError> {
     match args.cmd {
         Commands::Snap { name, description } => snap(&name, description.as_deref()),
         Commands::Init { directory } => initialize(directory.as_deref()),
-        Commands::Log { head } => log(head),
+        Commands::Log { head } => {
+            let stdout = io::stdout();
+            let handle = stdout.lock();
+            log(head, handle)
+        }
         Commands::Goto { snapshot_id, paths } => goto(&snapshot_id, paths),
         Commands::Cp {
             snapshot_id,
@@ -174,7 +180,11 @@ fn main() -> Result<(), VerError> {
             snapshot_id,
             offset,
             limit,
-        } => show_file(&path, snapshot_id, offset, limit),
+        } => {
+            let out = io::stdout();
+            let handle = out.lock();
+            show_file(&path, snapshot_id, offset, limit, handle)
+        }
         Commands::Merge { merge_cmd } => match merge_cmd {
             MergeCommands::Run {
                 name,

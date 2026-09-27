@@ -8,9 +8,7 @@ use crate::{
     errors::VerError,
     init::{HEAD_PATH, VER_DIRECTORY},
 };
-use memoize::memoize;
 
-#[memoize]
 pub fn resolve_ver_dir_path(current_dir: PathBuf) -> Result<PathBuf, VerError> {
     let ver_path = current_dir.join(VER_DIRECTORY);
     if ver_path.exists() {
