@@ -163,18 +163,34 @@ fn main() -> Result<(), VerError> {
     let args = Args::parse();
 
     match args.cmd {
-        Commands::Snap { name, description } => snap(&name, description.as_deref()),
-        Commands::Init { directory } => initialize(directory.as_deref()),
+        Commands::Snap { name, description } => {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            snap(&name, description.as_deref(), &mut handle)
+        }
+        Commands::Init { directory } => {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            initialize(directory.as_deref(), &mut handle)
+        }
         Commands::Log { head } => {
             let stdout = io::stdout();
             let handle = stdout.lock();
             log(head, handle)
         }
-        Commands::Goto { snapshot_id, paths } => goto(&snapshot_id, paths),
+        Commands::Goto { snapshot_id, paths } => {
+            let stderr = io::stderr();
+            let mut err_handle = stderr.lock();
+            goto(&snapshot_id, paths, &mut err_handle)
+        }
         Commands::Cp {
             snapshot_id,
             destination,
-        } => ver_copy(&snapshot_id, &destination),
+        } => {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            ver_copy(&snapshot_id, &destination, &mut handle)
+        }
         Commands::Show {
             path,
             snapshot_id,
@@ -183,7 +199,9 @@ fn main() -> Result<(), VerError> {
         } => {
             let out = io::stdout();
             let handle = out.lock();
-            show_file(&path, snapshot_id, offset, limit, handle)
+            let stderr = io::stderr();
+            let mut err_handle = stderr.lock();
+            show_file(&path, snapshot_id, offset, limit, handle, &mut err_handle)
         }
         Commands::Merge { merge_cmd } => match merge_cmd {
             MergeCommands::Run {
@@ -191,20 +209,47 @@ fn main() -> Result<(), VerError> {
                 from,
                 our_snapshot,
                 their_snapshot,
-            } => merge_run(from.into(), &name, our_snapshot, their_snapshot),
-            MergeCommands::Pick { name, our, their } => merge_pick(
-                &name,
-                our.iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<&str>>()
-                    .as_slice(),
-                &their
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<&str>>()
-                    .as_slice(),
-            ),
-            MergeCommands::End { name } => merge_end(&name),
+            } => {
+                let stdout = io::stdout();
+                let stderr = io::stderr();
+                let mut handle = stdout.lock();
+                let mut err_handle = stderr.lock();
+                merge_run::<io::StdoutLock<'_>, io::StderrLock<'_>>(
+                    from.into(),
+                    &name,
+                    our_snapshot,
+                    their_snapshot,
+                    &mut handle,
+                    &mut err_handle,
+                )
+            }
+            MergeCommands::Pick { name, our, their } => {
+                let stdout = io::stdout();
+                let stderr = io::stderr();
+                let mut handle = stdout.lock();
+                let mut err_handle = stderr.lock();
+                merge_pick(
+                    &name,
+                    our.iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<&str>>()
+                        .as_slice(),
+                    their
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<&str>>()
+                        .as_slice(),
+                    &mut handle,
+                    &mut err_handle,
+                )
+            }
+            MergeCommands::End { name } => {
+                let stdout = io::stdout();
+                let stderr = io::stderr();
+                let mut handle = stdout.lock();
+                let mut err_handle = stderr.lock();
+                merge_end(&name, &mut handle, &mut err_handle)
+            }
         },
     }
 }

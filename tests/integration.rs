@@ -26,7 +26,8 @@ impl Drop for CwdGuard {
 
 fn setup_repo() -> (TempDir, CwdGuard) {
     let tmp = TempDir::new("ver_test").unwrap();
-    initialize(Some(tmp.path().to_str().unwrap())).unwrap();
+    let mut out = Vec::new();
+    initialize(Some(tmp.path().to_str().unwrap()), &mut out).unwrap();
     let guard = CwdGuard::change_to(tmp.path());
     (tmp, guard)
 }
@@ -37,13 +38,25 @@ fn setup_repo() -> (TempDir, CwdGuard) {
 #[serial]
 fn init_creates_ver_directory_structure() {
     let tmp = TempDir::new("ver_test").unwrap();
-    initialize(Some(tmp.path().to_str().unwrap())).unwrap();
+    let mut out = Vec::new();
+    initialize(Some(tmp.path().to_str().unwrap()), &mut out).unwrap();
 
     let ver_dir = tmp.path().join(VER_DIRECTORY);
     assert!(ver_dir.exists());
     assert!(ver_dir.join(SNAPSHOT_HISTORY_FILE).exists());
     assert!(ver_dir.join("files.redb").exists());
     assert!(ver_dir.join("blobs.db").exists());
+}
+
+#[test]
+#[serial]
+fn init_outputs_success_message() {
+    let tmp = TempDir::new("ver_test").unwrap();
+    let mut out = Vec::new();
+    initialize(Some(tmp.path().to_str().unwrap()), &mut out).unwrap();
+
+    let output = String::from_utf8(out).unwrap();
+    assert!(output.contains("ver repository successfully initialized"));
 }
 
 // ---------- snap & goto ----------
@@ -54,16 +67,33 @@ fn snap_and_goto_roundtrip_restores_file_content() {
     let (_tmp, _guard) = setup_repo();
 
     fs::write("hello.txt", "version 1").unwrap();
-    ver::files::snap("first", None).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("first", None, &mut out).unwrap();
 
     fs::write("hello.txt", "version 2").unwrap();
-    ver::files::snap("second", None).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("second", None, &mut out).unwrap();
 
-    ver::files::goto::<String>("first", None).unwrap();
+    let mut err = Vec::new();
+    ver::files::goto::<String, _>("first", None, &mut err).unwrap();
     assert_eq!(fs::read_to_string("hello.txt").unwrap(), "version 1");
 
-    ver::files::goto::<String>("second", None).unwrap();
+    let mut err = Vec::new();
+    ver::files::goto::<String, _>("second", None, &mut err).unwrap();
     assert_eq!(fs::read_to_string("hello.txt").unwrap(), "version 2");
+}
+
+#[test]
+#[serial]
+fn snap_outputs_snapshot_id() {
+    let (_tmp, _guard) = setup_repo();
+
+    fs::write("hello.txt", "version 1").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("first", None, &mut out).unwrap();
+
+    let output = String::from_utf8(out).unwrap();
+    assert!(output.contains("Saved current snapshot under:"));
 }
 
 #[test]
@@ -72,13 +102,11 @@ fn goto_by_snapshot_id_hash_works() {
     let (_tmp, _guard) = setup_repo();
 
     fs::write("a.txt", "alpha").unwrap();
-    ver::files::snap("named", None).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("named", None, &mut out).unwrap();
 
     // Extract the snapshot hash from the history file
-    let history = fs::read_to_string(
-        Path::new(VER_DIRECTORY).join(SNAPSHOT_HISTORY_FILE),
-    )
-    .unwrap();
+    let history = fs::read_to_string(Path::new(VER_DIRECTORY).join(SNAPSHOT_HISTORY_FILE)).unwrap();
     let hash = history
         .split('(')
         .nth(1)
@@ -89,7 +117,8 @@ fn goto_by_snapshot_id_hash_works() {
         .to_string();
 
     fs::write("a.txt", "changed").unwrap();
-    ver::files::goto::<String>(&hash, None).unwrap();
+    let mut err = Vec::new();
+    ver::files::goto::<String, _>(&hash, None, &mut err).unwrap();
     assert_eq!(fs::read_to_string("a.txt").unwrap(), "alpha");
 }
 
@@ -99,10 +128,12 @@ fn goto_removes_files_not_in_snapshot() {
     let (_tmp, _guard) = setup_repo();
 
     fs::write("keep.txt", "keep me").unwrap();
-    ver::files::snap("base", None).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("base", None, &mut out).unwrap();
 
     fs::write("extra.txt", "should be deleted").unwrap();
-    ver::files::goto::<String>("base", None).unwrap();
+    let mut err = Vec::new();
+    ver::files::goto::<String, _>("base", None, &mut err).unwrap();
 
     assert!(!Path::new("extra.txt").exists());
     assert_eq!(fs::read_to_string("keep.txt").unwrap(), "keep me");
@@ -115,12 +146,14 @@ fn goto_with_specific_paths_only_reverts_those() {
 
     fs::write("one.txt", "one-v1").unwrap();
     fs::write("two.txt", "two-v1").unwrap();
-    ver::files::snap("v1", None).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("v1", None, &mut out).unwrap();
 
     fs::write("one.txt", "one-v2").unwrap();
     fs::write("two.txt", "two-v2").unwrap();
 
-    ver::files::goto("v1", Some(vec!["one.txt".to_string()])).unwrap();
+    let mut err = Vec::new();
+    ver::files::goto("v1", Some(vec!["one.txt".to_string()]), &mut err).unwrap();
 
     assert_eq!(fs::read_to_string("one.txt").unwrap(), "one-v1");
     assert_eq!(fs::read_to_string("two.txt").unwrap(), "two-v2");
@@ -130,7 +163,8 @@ fn goto_with_specific_paths_only_reverts_those() {
 #[serial]
 fn goto_nonexistent_snapshot_returns_error() {
     let (_tmp, _guard) = setup_repo();
-    let result = ver::files::goto::<String>("nonexistent", None);
+    let mut err = Vec::new();
+    let result = ver::files::goto::<String, _>("nonexistent", None, &mut err);
     assert!(result.is_err());
 }
 
@@ -145,17 +179,22 @@ fn verignore_excludes_files_from_snapshot() {
     fs::write("ignored.txt", "secret").unwrap();
     fs::write("tracked.txt", "tracked").unwrap();
 
-    ver::files::snap("s1", None).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("s1", None, &mut out).unwrap();
 
     // Modify both, then revert — ignored.txt should keep its new content
     fs::write("ignored.txt", "modified-secret").unwrap();
     fs::write("tracked.txt", "modified-tracked").unwrap();
 
-    ver::files::goto::<String>("s1", None).unwrap();
+    let mut err = Vec::new();
+    ver::files::goto::<String, _>("s1", None, &mut err).unwrap();
 
     // ignored.txt was never snapshotted and is excluded by .verignore,
     // so goto leaves it untouched
-    assert_eq!(fs::read_to_string("ignored.txt").unwrap(), "modified-secret");
+    assert_eq!(
+        fs::read_to_string("ignored.txt").unwrap(),
+        "modified-secret"
+    );
     // tracked.txt was snapshotted, so it gets restored
     assert_eq!(fs::read_to_string("tracked.txt").unwrap(), "tracked");
 }
@@ -168,15 +207,19 @@ fn snapshot_names_resolve_to_correct_ids() {
     let (_tmp, _guard) = setup_repo();
 
     fs::write("f.txt", "content-a").unwrap();
-    ver::files::snap("alpha", None).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("alpha", None, &mut out).unwrap();
 
     fs::write("f.txt", "content-b").unwrap();
-    ver::files::snap("beta", None).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("beta", None, &mut out).unwrap();
 
-    ver::files::goto::<String>("alpha", None).unwrap();
+    let mut err = Vec::new();
+    ver::files::goto::<String, _>("alpha", None, &mut err).unwrap();
     assert_eq!(fs::read_to_string("f.txt").unwrap(), "content-a");
 
-    ver::files::goto::<String>("beta", None).unwrap();
+    let mut err = Vec::new();
+    ver::files::goto::<String, _>("beta", None, &mut err).unwrap();
     assert_eq!(fs::read_to_string("f.txt").unwrap(), "content-b");
 }
 
@@ -188,15 +231,14 @@ fn log_output_contains_snapshot_names() {
     let (_tmp, _guard) = setup_repo();
 
     fs::write("x.txt", "1").unwrap();
-    ver::files::snap("checkpoint-1", Some("first snap")).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("checkpoint-1", Some("first snap"), &mut out).unwrap();
 
     fs::write("x.txt", "2").unwrap();
-    ver::files::snap("checkpoint-2", None).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("checkpoint-2", None, &mut out).unwrap();
 
-    let history = fs::read_to_string(
-        Path::new(VER_DIRECTORY).join(SNAPSHOT_HISTORY_FILE),
-    )
-    .unwrap();
+    let history = fs::read_to_string(Path::new(VER_DIRECTORY).join(SNAPSHOT_HISTORY_FILE)).unwrap();
 
     assert!(history.contains("checkpoint-1"));
     assert!(history.contains("checkpoint-2"));
@@ -212,10 +254,8 @@ fn resolve_ver_dir_finds_ver_in_ancestor() {
 
     let sub = Path::new("sub/dir");
     fs::create_dir_all(sub).unwrap();
-    let resolved = ver::commons::resolve_ver_dir_path(
-        env::current_dir().unwrap().join(sub),
-    )
-    .unwrap();
+    let resolved =
+        ver::commons::resolve_ver_dir_path(env::current_dir().unwrap().join(sub)).unwrap();
 
     assert!(resolved.ends_with(VER_DIRECTORY));
 }

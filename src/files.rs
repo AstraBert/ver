@@ -82,7 +82,7 @@ fn normalize_path(path: &str) -> io::Result<PathBuf> {
     let normalized = path.replace("\\", "/");
     let fp = Path::new(&normalized);
     let can = fp.canonicalize()?;
-    return Ok(can);
+    Ok(can)
 }
 
 fn collect_files<S: AsRef<str>>(paths: &[S]) -> Result<Vec<PathBuf>, VerError> {
@@ -104,7 +104,7 @@ fn collect_files<S: AsRef<str>>(paths: &[S]) -> Result<Vec<PathBuf>, VerError> {
                         {
                             return false;
                         }
-                        return true;
+                        true
                     } else {
                         if d.path().ends_with(".ver")
                             || d.path().ends_with(".ver/")
@@ -114,14 +114,14 @@ fn collect_files<S: AsRef<str>>(paths: &[S]) -> Result<Vec<PathBuf>, VerError> {
                         {
                             return false;
                         }
-                        return true;
+                        true
                     }
                 })
                 .build();
             for entry in walker {
                 let entry = entry?;
                 if entry.path().is_file() {
-                    let p = normalize_path(&entry.path().to_string_lossy().to_string())?;
+                    let p = normalize_path(entry.path().to_string_lossy().as_ref())?;
                     collected.push(p);
                 }
             }
@@ -131,12 +131,16 @@ fn collect_files<S: AsRef<str>>(paths: &[S]) -> Result<Vec<PathBuf>, VerError> {
     Ok(collected)
 }
 
-pub fn snap(name: &str, message: Option<&str>) -> Result<(), VerError> {
+pub fn snap<O: io::Write>(
+    name: &str,
+    message: Option<&str>,
+    std_out: &mut O,
+) -> Result<(), VerError> {
     let (snapshot_id, snapshot) = store_files()?;
 
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
-    let redb = Database::open(&resolved.join(REDB_PATH))?;
+    let redb = Database::open(resolved.join(REDB_PATH))?;
 
     let tx = redb.begin_write()?;
     {
@@ -166,17 +170,21 @@ pub fn snap(name: &str, message: Option<&str>) -> Result<(), VerError> {
 
     name_snapshot(&redb, snapshot_id.as_bytes().to_owned(), name)?;
 
-    println!("Saved current snapshot under: {}\n", snapshot_id);
+    writeln!(std_out, "Saved current snapshot under: {}\n", snapshot_id)?;
 
     Ok(())
 }
 
-pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(), VerError> {
+pub fn goto<S: AsRef<str>, E: io::Write>(
+    snapshot_id: &str,
+    paths: Option<Vec<S>>,
+    std_err: &mut E,
+) -> Result<(), VerError> {
     // open databases
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
     let repo = resolved.parent().unwrap();
-    let redb = Database::open(&resolved.join(REDB_PATH))?;
+    let redb = Database::open(resolved.join(REDB_PATH))?;
     let blobdb = init_blobs_db(&resolved)?;
 
     let maybe_hash = blake3::Hash::from_str(snapshot_id);
@@ -205,7 +213,7 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
                     if let Some(content) = opt {
                         fs::write(p, content)?;
                     } else {
-                        eprintln!("Could not find snapshotted content for: {}", str_p);
+                        writeln!(std_err, "Could not find snapshotted content for: {}", str_p)?;
                     }
                 } else {
                     // not in snapshot or does not exist, so try deleting
@@ -232,11 +240,13 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
                     if let Some(content) = opt {
                         fs::write(p, content)?;
                     } else {
-                        eprintln!("Could not find snapshotted content for: {}", str_p);
+                        writeln!(std_err, "Could not find snapshotted content for: {}", str_p)?;
                     }
                 } else {
                     // not in snapshot, so delete
-                    fs::remove_file(p)?;
+                    let res = fs::remove_file(p);
+                    // ignore not found files
+                    if res.is_err_and(|e| matches!(e.kind(), io::ErrorKind::NotFound)) {}
                 }
             }
         }

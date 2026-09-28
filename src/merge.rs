@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     env, fs,
-    io::Write,
+    io::{self, Write},
     path::PathBuf,
     str::FromStr,
 };
@@ -191,7 +191,7 @@ fn find_merge_base(
         if !frontier_a.is_empty() {
             // we know it's not empty
             let cur_a = frontier_a.pop_front().unwrap();
-            let parents = get_parents(&table_a, cur_a)?;
+            let parents = get_parents(table_a, cur_a)?;
             for par in parents {
                 if visited_b.contains(&par) {
                     return Ok(Some(par));
@@ -206,7 +206,7 @@ fn find_merge_base(
         if !frontier_b.is_empty() {
             // we know it's not empty
             let cur_b = frontier_b.pop_front().unwrap();
-            let parents = get_parents(&table_b, cur_b)?;
+            let parents = get_parents(table_b, cur_b)?;
 
             for par in parents {
                 if visited_a.contains(&par) {
@@ -232,26 +232,28 @@ fn get_union_paths<'a>(
 ) -> HashSet<&'a str> {
     let mut set = HashSet::new();
 
-    for (k, _) in &base.repository_state {
+    for k in base.repository_state.keys() {
         set.insert(k.as_str());
     }
 
-    for (o, _) in &ours.repository_state {
+    for o in ours.repository_state.keys() {
         set.insert(o.as_str());
     }
 
-    for (t, _) in &theirs.repository_state {
+    for t in theirs.repository_state.keys() {
         set.insert(t.as_str());
     }
 
     set
 }
 
-pub fn merge_run(
+pub fn merge_run<O: io::Write, E: io::Write>(
     other_repo: PathBuf,
     name: &str,
     snapshot_id_cur: Option<String>,
     snapshot_id_inc: Option<String>,
+    std_out: &mut O,
+    std_err: &mut E,
 ) -> Result<(), VerError> {
     let resolved = resolve_ver_dir_path(env::current_dir()?)?;
 
@@ -277,11 +279,11 @@ pub fn merge_run(
             Err(_) => get_snapshot_by_name(&redb_a, cur)?,
         };
 
-        let maybe_hash_inc = blake3::Hash::from_str(&inc);
+        let maybe_hash_inc = blake3::Hash::from_str(inc);
 
         let hash_inc = match maybe_hash_inc {
             Ok(h) => h.as_bytes().to_owned(),
-            Err(_) => get_snapshot_by_name(&redb_b, &inc)?,
+            Err(_) => get_snapshot_by_name(&redb_b, inc)?,
         };
 
         (hash_cur, hash_inc)
@@ -305,11 +307,11 @@ pub fn merge_run(
         )
     } else {
         let inc = snapshot_id_inc.as_deref().unwrap();
-        let maybe_hash_inc = blake3::Hash::from_str(&inc);
+        let maybe_hash_inc = blake3::Hash::from_str(inc);
 
         let hash_inc = match maybe_hash_inc {
             Ok(h) => h.as_bytes().to_owned(),
-            Err(_) => get_snapshot_by_name(&redb_b, &inc)?,
+            Err(_) => get_snapshot_by_name(&redb_b, inc)?,
         };
         (
             get_head(&resolved)?.expect("Should have at least one entry"),
@@ -475,14 +477,17 @@ pub fn merge_run(
                 }
 
                 for d in deleted_paths {
-                    fs::remove_file(d)?;
+                    let res = fs::remove_file(d);
+                    if res.is_err_and(|e| matches!(e.kind(), io::ErrorKind::NotFound)) {
+                        continue;
+                    }
                 }
 
                 for n in resolved_paths {
-                    println!("Automatically resolved conflict on {}", n.0);
+                    writeln!(std_out, "Automatically resolved conflict on {}", n.0)?;
                     let content = n.1.as_bytes();
                     let hash_key = blake3::hash(content).as_bytes().to_owned();
-                    fs::write(n.0, &content)?;
+                    fs::write(n.0, content)?;
                     blobdb_a.put(hash_key, content)?;
                     repo_state.insert(n.0.to_string(), hash_key);
                 }
@@ -521,59 +526,62 @@ pub fn merge_run(
 
                 name_snapshot(&redb_a, snap_hash.as_bytes().to_owned(), name)?;
 
-                println!(
+                writeln!(
+                    std_out,
                     "Merge successfully completed and saved under snapshot {} ({})",
                     name, snap_hash
-                );
+                )?;
                 return Ok(());
             } else {
-                eprintln!(
+                writeln!(
+                    std_err,
                     "There are conflicts between the two repository, so the merge could not be completed. Find details below."
-                );
+                )?;
 
                 if !deleted_conflicting_paths.is_empty() {
-                    eprintln!("Files with deletion-related conflicts:");
+                    writeln!(std_err, "Files with deletion-related conflicts:")?;
                     for (k, v) in &deleted_conflicting_paths {
                         let des = if v.1.is_some() {
                             "ours modified, theirs deleted"
                         } else {
                             "theirs modified, ours deleted"
                         };
-                        eprintln!("{}\t{}", k, des);
+                        writeln!(std_err, "{}\t{}", k, des)?;
                     }
-                    eprintln!("");
+                    writeln!(std_err)?;
                 }
 
                 if !added_conflicting_paths.is_empty() {
-                    eprintln!("Files with creation-related conflicts:");
+                    writeln!(std_err, "Files with creation-related conflicts:")?;
                     for f in &added_conflicting_paths {
-                        eprintln!("{}\tboth added, different content", f.0);
+                        writeln!(std_err, "{}\tboth added, different content", f.0)?;
                     }
-                    eprintln!("");
+                    writeln!(std_err)?;
                 }
 
                 if !modified_conflicting_paths.is_empty() {
-                    eprintln!("Files with modification-related conflicts:");
+                    writeln!(std_err, "Files with modification-related conflicts:")?;
                     for (k, v) in &modified_conflicting_paths {
                         if let Some(ref merge_conflict) = v.2 {
-                            eprintln!("{}", k);
-                            eprintln!("");
-                            eprintln!("{}", merge_conflict);
-                            eprintln!("");
+                            writeln!(std_err, "{}", k)?;
+                            writeln!(std_err)?;
+                            writeln!(std_err, "{}", merge_conflict)?;
+                            writeln!(std_err)?;
                         } else {
-                            eprintln!(
-                                "{}\t{}",
-                                k,
-                                "File does not appear to be text-based, could not compute merge conflicts"
-                            );
+                            writeln!(
+                                std_err,
+                                "{}\tFile does not appear to be text-based, could not compute merge conflicts",
+                                k
+                            )?;
                         }
                     }
-                    eprintln!("");
+                    writeln!(std_err)?;
                 }
 
-                eprintln!(
+                writeln!(
+                    std_err,
                     "Please resolve conflicts, then run `ver merge pick` to pick a conflicting file version (theirs or ours), then finalize the merge with `ver merge end`"
-                );
+                )?;
 
                 let partial_merge: PartialMerge = PartialMergeInner {
                     snapshot_id_cur: snapshot_id_a,
@@ -609,7 +617,13 @@ pub fn merge_run(
     Err("Could not resolve the last snapshot in either of the repositories".into())
 }
 
-pub fn merge_pick(name: &str, use_ours: &[&str], use_theirs: &[&str]) -> Result<(), VerError> {
+pub fn merge_pick<O: io::Write, E: io::Write>(
+    name: &str,
+    use_ours: &[&str],
+    use_theirs: &[&str],
+    std_out: &mut O,
+    std_err: &mut E,
+) -> Result<(), VerError> {
     let resolved = resolve_ver_dir_path(env::current_dir()?)?;
 
     let redb = Database::open(resolved.join(REDB_PATH))?;
@@ -636,10 +650,11 @@ pub fn merge_pick(name: &str, use_ours: &[&str], use_theirs: &[&str]) -> Result<
                 inner.clean_merge.push((path, modified.0, true));
                 inner.modified_conflicting_paths.remove(path);
             } else {
-                eprintln!(
+                writeln!(
+                    std_err,
                     "Path {} does not appear to have any conflicts in merge {}",
                     path, name,
-                );
+                )?;
             }
         }
         for path in use_theirs {
@@ -657,10 +672,11 @@ pub fn merge_pick(name: &str, use_ours: &[&str], use_theirs: &[&str]) -> Result<
                 inner.clean_merge.push((path, modified.1, false));
                 inner.modified_conflicting_paths.remove(path);
             } else {
-                eprintln!(
+                writeln!(
+                    std_err,
                     "Path {} does not appear to have any conflicts in merge {}",
                     path, name,
-                );
+                )?;
             }
         }
         let new_merge = PartialMerge::from(inner);
@@ -672,14 +688,18 @@ pub fn merge_pick(name: &str, use_ours: &[&str], use_theirs: &[&str]) -> Result<
         }
         wtx.commit()?;
 
-        println!("Successfully applied merge picks");
+        writeln!(std_out, "Successfully applied merge picks")?;
         return Ok(());
     }
 
     Err(format!("Could not find partial merge under {}", name).into())
 }
 
-pub fn merge_end(name: &str) -> Result<(), VerError> {
+pub fn merge_end<O: io::Write, E: io::Write>(
+    name: &str,
+    std_out: &mut O,
+    std_err: &mut E,
+) -> Result<(), VerError> {
     let resolved = resolve_ver_dir_path(env::current_dir()?)?;
 
     let redb_a = Database::open(resolved.join(REDB_PATH))?;
@@ -695,9 +715,13 @@ pub fn merge_end(name: &str) -> Result<(), VerError> {
             || !partial_merge.deleted_conflicting_paths.is_empty()
             || !partial_merge.modified_conflicting_paths.is_empty()
         {
-            eprintln!("You still need to resolve the following conflicts:\n");
+            writeln!(
+                std_err,
+                "You still need to resolve the following conflicts:\n"
+            )?;
             if !partial_merge.added_conflicting_paths.is_empty() {
-                eprintln!(
+                writeln!(
+                    std_err,
                     "Addition-related conflicts:\n- {}",
                     partial_merge
                         .added_conflicting_paths
@@ -705,11 +729,12 @@ pub fn merge_end(name: &str) -> Result<(), VerError> {
                         .map(|e| e.0)
                         .collect::<Vec<&str>>()
                         .join("\n- ")
-                );
-                eprintln!("");
+                )?;
+                writeln!(std_err)?;
             }
             if !partial_merge.deleted_conflicting_paths.is_empty() {
-                eprintln!(
+                writeln!(
+                    std_err,
                     "Deletion-related conflicts:\n- {}",
                     partial_merge
                         .deleted_conflicting_paths
@@ -717,11 +742,12 @@ pub fn merge_end(name: &str) -> Result<(), VerError> {
                         .map(|s| s.0)
                         .collect::<Vec<&str>>()
                         .join("\n- ")
-                );
-                eprintln!("");
+                )?;
+                writeln!(std_err)?;
             }
             if !partial_merge.modified_conflicting_paths.is_empty() {
-                eprintln!(
+                writeln!(
+                    std_err,
                     "Modification-related conflicts:\n- {}",
                     partial_merge
                         .modified_conflicting_paths
@@ -729,12 +755,13 @@ pub fn merge_end(name: &str) -> Result<(), VerError> {
                         .map(|s| s.0)
                         .collect::<Vec<&str>>()
                         .join("\n- ")
-                );
-                eprintln!("");
+                )?;
+                writeln!(std_err)?;
             }
-            eprintln!(
+            writeln!(
+                std_err,
                 "Please resolve conflicts, then run `ver merge pick` to pick a conflicting file version (theirs or ours), then finalize the merge with `ver merge end`"
-            );
+            )?;
             return Ok(());
         }
 
@@ -758,14 +785,17 @@ pub fn merge_end(name: &str) -> Result<(), VerError> {
         }
 
         for d in inner.deleted_paths {
-            fs::remove_file(d)?;
+            let res = fs::remove_file(d);
+            if res.is_err_and(|e| matches!(e.kind(), io::ErrorKind::NotFound)) {
+                continue;
+            }
         }
 
         for n in inner.resolved_paths {
-            println!("Automatically resolved conflict on {}", n.0);
+            writeln!(std_out, "Automatically resolved conflict on {}", n.0)?;
             let content = n.1.as_bytes();
             let hash_key = blake3::hash(content).as_bytes().to_owned();
-            fs::write(n.0, &content)?;
+            fs::write(n.0, content)?;
             blobdb_a.put(hash_key, content)?;
             repo_state.insert(n.0.to_string(), hash_key);
         }
@@ -813,10 +843,11 @@ pub fn merge_end(name: &str) -> Result<(), VerError> {
         }
         mtx.commit()?;
 
-        println!(
+        writeln!(
+            std_out,
             "Merge successfully completed and saved under snapshot {} ({})",
             name, snap_hash
-        );
+        )?;
 
         return Ok(());
     }

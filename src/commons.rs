@@ -25,7 +25,7 @@ pub fn resolve_ver_dir_path(current_dir: PathBuf) -> Result<PathBuf, VerError> {
 }
 
 /// Check whether the provided bytes are valid UTF-8 text, and, if so, return them as string
-pub fn to_text<'a>(content: &'a [u8]) -> Option<&'a str> {
+pub fn to_text(content: &[u8]) -> Option<&str> {
     let buf = if content.len() > 8192 {
         &content[..8192]
     } else {

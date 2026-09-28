@@ -1,4 +1,4 @@
-use std::{env, fs, path::Path, str::FromStr};
+use std::{env, fs, io, path::Path, str::FromStr};
 
 use fs_extra::dir::{CopyOptions, copy as copy_dir};
 use redb::{Database, ReadableDatabase};
@@ -11,7 +11,11 @@ use crate::{
     named::get_snapshot_by_name,
 };
 
-pub fn copy(snapshot_id: &str, destination: &str) -> Result<(), VerError> {
+pub fn copy<O: io::Write>(
+    snapshot_id: &str,
+    destination: &str,
+    std_out: &mut O,
+) -> Result<(), VerError> {
     let dest_path = Path::new(destination);
 
     if !dest_path.is_dir() {
@@ -21,7 +25,7 @@ pub fn copy(snapshot_id: &str, destination: &str) -> Result<(), VerError> {
     // open databases
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
-    let redb = Database::open(&resolved.join(REDB_PATH))?;
+    let redb = Database::open(resolved.join(REDB_PATH))?;
     let blobdb = init_blobs_db(&resolved)?;
 
     let maybe_hash = blake3::Hash::from_str(snapshot_id);
@@ -65,7 +69,7 @@ pub fn copy(snapshot_id: &str, destination: &str) -> Result<(), VerError> {
 
         copied += 1;
 
-        println!("Copied {copied} elements to {destination}");
+        writeln!(std_out, "Copied {copied} elements to {destination}")?;
 
         return Ok(());
     }

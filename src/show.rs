@@ -16,7 +16,7 @@ fn hexdump(bytes: &[u8], mut out: impl io::Write) -> Result<(), VerError> {
         for b in chunk {
             write!(out, "{:02x} ", b)?;
         }
-        writeln!(out, "")?;
+        writeln!(out)?;
     }
 
     Ok(())
@@ -31,16 +31,17 @@ fn hexdump(bytes: &[u8], mut out: impl io::Write) -> Result<(), VerError> {
     Ok(())
 }
 
-pub fn show_file(
+pub fn show_file<O: io::Write, E: io::Write>(
     path: &str,
     snapshot_id: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
-    mut out: impl io::Write,
+    mut out: O,
+    std_err: &mut E,
 ) -> Result<(), VerError> {
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
-    let redb = Database::open(&resolved.join(REDB_PATH))?;
+    let redb = Database::open(resolved.join(REDB_PATH))?;
     let rx = redb.begin_read()?;
     let table = rx.open_table(SNAPSHOT_TABLE)?;
 
@@ -84,12 +85,13 @@ pub fn show_file(
             let offset = offset.unwrap_or_default();
             let limit = content.len().min(limit.unwrap_or(content.len()));
             let new_cont = &content[offset..limit];
-            if let Some(text) = to_text(&new_cont) {
+            if let Some(text) = to_text(new_cont) {
                 writeln!(out, "{}", text)?;
             } else {
-                eprintln!(
+                writeln!(
+                    std_err,
                     "WARNING: the requested file does not appear to be text-based, it will be hex-dumped"
-                );
+                )?;
                 hexdump(new_cont, out)?;
             }
         } else {

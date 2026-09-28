@@ -133,12 +133,12 @@ impl From<PostcardError> for VerError {
 
 impl From<fs_extra::error::Error> for VerError {
     fn from(value: fs_extra::error::Error) -> Self {
-        return Self {
+        Self {
             message: format!(
                 "Error while copying the .ver folder to the new destination: {}",
                 value
             ),
-        };
+        }
     }
 }
 
