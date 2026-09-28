@@ -1,3 +1,4 @@
+use std::io;
 use std::{env, fs};
 
 #[cfg(feature = "minus")]
@@ -10,7 +11,7 @@ use crate::errors::VerError;
 use crate::init::SNAPSHOT_HISTORY_FILE;
 
 #[cfg(feature = "minus")]
-pub fn log(head: Option<usize>) -> Result<(), VerError> {
+pub fn log(head: Option<usize>, mut _out: impl io::Write) -> Result<(), VerError> {
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
     let fl = resolved.join(SNAPSHOT_HISTORY_FILE);
@@ -36,7 +37,7 @@ pub fn log(head: Option<usize>) -> Result<(), VerError> {
 }
 
 #[cfg(not(feature = "minus"))]
-pub fn log(head: Option<usize>) -> Result<(), VerError> {
+pub fn log(head: Option<usize>, mut out: impl io::Write) -> Result<(), VerError> {
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
     let fl = resolved.join(SNAPSHOT_HISTORY_FILE);
@@ -50,7 +51,7 @@ pub fn log(head: Option<usize>) -> Result<(), VerError> {
         let _ = lines.split_off(h);
     }
 
-    println!("{}", lines.join("\n"));
+    writeln!(out, "{}", lines.join("\n"))?;
 
     Ok(())
 }

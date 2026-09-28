@@ -1,4 +1,4 @@
-use std::{env, str::FromStr};
+use std::{env, io, str::FromStr};
 
 use redb::{Database, ReadableDatabase};
 
@@ -11,31 +11,37 @@ use crate::{
 };
 
 #[cfg(not(feature = "pretty-hex"))]
-fn hexdump(bytes: &[u8]) {
+fn hexdump(bytes: &[u8], mut out: impl io::Write) -> Result<(), VerError> {
     for chunk in bytes.chunks(16) {
         for b in chunk {
-            print!("{:02x} ", b);
+            write!(out, "{:02x} ", b)?;
         }
-        println!();
+        writeln!(out)?;
     }
+
+    Ok(())
 }
 
 #[cfg(feature = "pretty-hex")]
-fn hexdump(bytes: &[u8]) {
+fn hexdump(bytes: &[u8], mut out: impl io::Write) -> Result<(), VerError> {
     use pretty_hex::PrettyHex;
 
-    println!("{:?}", bytes.hex_dump());
+    writeln!(out, "{:?}", bytes.hex_dump())?;
+
+    Ok(())
 }
 
-pub fn show_file(
+pub fn show_file<O: io::Write, E: io::Write>(
     path: &str,
     snapshot_id: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
+    mut out: O,
+    std_err: &mut E,
 ) -> Result<(), VerError> {
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
-    let redb = Database::open(&resolved.join(REDB_PATH))?;
+    let redb = Database::open(resolved.join(REDB_PATH))?;
     let rx = redb.begin_read()?;
     let table = rx.open_table(SNAPSHOT_TABLE)?;
 
@@ -79,13 +85,14 @@ pub fn show_file(
             let offset = offset.unwrap_or_default();
             let limit = content.len().min(limit.unwrap_or(content.len()));
             let new_cont = &content[offset..limit];
-            if let Some(text) = to_text(&new_cont) {
-                println!("{}", text);
+            if let Some(text) = to_text(new_cont) {
+                writeln!(out, "{}", text)?;
             } else {
-                eprintln!(
+                writeln!(
+                    std_err,
                     "WARNING: the requested file does not appear to be text-based, it will be hex-dumped"
-                );
-                hexdump(new_cont);
+                )?;
+                hexdump(new_cont, out)?;
             }
         } else {
             return Err(format!("Could not find content of {} in blobsdb", path).into());

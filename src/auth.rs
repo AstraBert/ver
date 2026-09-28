@@ -1,8 +1,8 @@
-use std::fs;
+use std::{fs, io};
 
 use crate::errors::VerError;
 
-pub fn whoami() -> Result<(), VerError> {
+pub fn whoami<O: io::Write>(std_out: &mut O) -> Result<(), VerError> {
     let user_file = dirs::home_dir()
         .expect("Should be able to resolve home directory")
         .join("ver")
@@ -13,6 +13,6 @@ pub fn whoami() -> Result<(), VerError> {
         );
     }
     let content = fs::read_to_string(user_file)?;
-    println!("{}", content);
+    writeln!(std_out, "{}", content)?;
     Ok(())
 }

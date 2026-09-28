@@ -1,5 +1,5 @@
 use std::{
-    env, fs,
+    env, fs, io,
     path::{Path, PathBuf},
 };
 
@@ -35,20 +35,17 @@ pub fn create_redb(base_path: &Path) -> Result<Database, RedbError> {
     Ok(db)
 }
 
-pub fn initialize(directory: Option<&str>) -> Result<(), VerError> {
+pub fn initialize<O: io::Write>(directory: Option<&str>, std_out: &mut O) -> Result<(), VerError> {
     let init_dir = directory.map_or(
         env::current_dir().expect("Could not infer the current directory"),
-        |d| PathBuf::from(d),
+        PathBuf::from,
     );
     let _ = init_blobs_db(&init_dir.join(VER_DIRECTORY))?;
     let _ = create_redb(&init_dir.join(VER_DIRECTORY))?;
-    fs::write(
-        &init_dir.join(VER_DIRECTORY).join(SNAPSHOT_HISTORY_FILE),
-        "",
-    )?;
-    fs::write(&init_dir.join(VER_DIRECTORY).join(HEAD_PATH), "")?;
+    fs::write(init_dir.join(VER_DIRECTORY).join(SNAPSHOT_HISTORY_FILE), "")?;
+    fs::write(init_dir.join(VER_DIRECTORY).join(HEAD_PATH), "")?;
 
-    println!("ver repository successfully initialized");
+    writeln!(std_out, "ver repository successfully initialized")?;
 
     Ok(())
 }
