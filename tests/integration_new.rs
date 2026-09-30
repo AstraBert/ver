@@ -1437,6 +1437,284 @@ fn merge_preserves_unconflicted_files() {
     assert!(Path::new("b_added.txt").exists());
 }
 
+// ---------- diff command ----------
+
+#[test]
+#[serial]
+fn diff_shows_changes_between_two_snapshots() {
+    let (_tmp, _guard) = setup_repo();
+
+    fs::write("file.txt", "line1\nline2\nline3\n").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("v1", None, &mut out).unwrap();
+
+    fs::write("file.txt", "line1\nline2 modified\nline3\n").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("v2", None, &mut out).unwrap();
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = ver::diff::diff_file(
+        "file.txt",
+        Some("v1".to_string()),
+        "v2".to_string(),
+        &mut out,
+        &mut err,
+    );
+    assert!(result.is_ok());
+
+    let output = String::from_utf8(out).unwrap();
+    assert!(output.contains("-line2"));
+    assert!(output.contains("+line2 modified"));
+}
+
+#[test]
+#[serial]
+fn diff_defaults_from_to_head() {
+    let (_tmp, _guard) = setup_repo();
+
+    fs::write("file.txt", "original\n").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("first", None, &mut out).unwrap();
+
+    fs::write("file.txt", "changed\n").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("second", None, &mut out).unwrap();
+
+    // HEAD is now "second", diff against "first"
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = ver::diff::diff_file(
+        "file.txt",
+        None,
+        "first".to_string(),
+        &mut out,
+        &mut err,
+    );
+    assert!(result.is_ok());
+
+    let output = String::from_utf8(out).unwrap();
+    assert!(output.contains("-changed"));
+    assert!(output.contains("+original"));
+}
+
+#[test]
+#[serial]
+fn diff_identical_files_reports_identical() {
+    let (_tmp, _guard) = setup_repo();
+
+    fs::write("file.txt", "same content\n").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("s1", None, &mut out).unwrap();
+
+    let mut out = Vec::new();
+    ver::files::snap("s2", None, &mut out).unwrap();
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = ver::diff::diff_file(
+        "file.txt",
+        Some("s1".to_string()),
+        "s2".to_string(),
+        &mut out,
+        &mut err,
+    );
+    assert!(result.is_ok());
+
+    let output = String::from_utf8(out).unwrap();
+    assert!(output.contains("Files are identical"));
+}
+
+#[test]
+#[serial]
+fn diff_file_missing_in_from_snapshot() {
+    let (_tmp, _guard) = setup_repo();
+
+    fs::write("other.txt", "other\n").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("v1", None, &mut out).unwrap();
+
+    fs::write("file.txt", "new file\n").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("v2", None, &mut out).unwrap();
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = ver::diff::diff_file(
+        "file.txt",
+        Some("v1".to_string()),
+        "v2".to_string(),
+        &mut out,
+        &mut err,
+    );
+    assert!(result.is_ok());
+
+    let err_output = String::from_utf8(err).unwrap();
+    assert!(err_output.contains("does not exist in the \"from\" snapshot"));
+}
+
+#[test]
+#[serial]
+fn diff_file_missing_in_against_snapshot() {
+    let (_tmp, _guard) = setup_repo();
+
+    fs::write("file.txt", "will be removed\n").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("v1", None, &mut out).unwrap();
+
+    fs::remove_file("file.txt").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("v2", None, &mut out).unwrap();
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = ver::diff::diff_file(
+        "file.txt",
+        Some("v1".to_string()),
+        "v2".to_string(),
+        &mut out,
+        &mut err,
+    );
+    assert!(result.is_ok());
+
+    let err_output = String::from_utf8(err).unwrap();
+    assert!(err_output.contains("does not exist in the \"against\" snapshot"));
+}
+
+#[test]
+#[serial]
+fn diff_file_missing_in_both_snapshots_errors() {
+    let (_tmp, _guard) = setup_repo();
+
+    fs::write("other.txt", "content\n").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("v1", None, &mut out).unwrap();
+
+    let mut out = Vec::new();
+    ver::files::snap("v2", None, &mut out).unwrap();
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = ver::diff::diff_file(
+        "nonexistent.txt",
+        Some("v1".to_string()),
+        "v2".to_string(),
+        &mut out,
+        &mut err,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+#[serial]
+fn diff_nonexistent_from_snapshot_errors() {
+    let (_tmp, _guard) = setup_repo_with_snapshot();
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = ver::diff::diff_file(
+        "test.txt",
+        Some("nonexistent".to_string()),
+        "initial".to_string(),
+        &mut out,
+        &mut err,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+#[serial]
+fn diff_nonexistent_against_snapshot_errors() {
+    let (_tmp, _guard) = setup_repo_with_snapshot();
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = ver::diff::diff_file(
+        "test.txt",
+        None,
+        "nonexistent".to_string(),
+        &mut out,
+        &mut err,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+#[serial]
+fn diff_no_snapshots_errors() {
+    let (_tmp, _guard) = setup_repo();
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = ver::diff::diff_file(
+        "file.txt",
+        None,
+        "anything".to_string(),
+        &mut out,
+        &mut err,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+#[serial]
+fn diff_binary_file_warns_on_stderr() {
+    let (_tmp, _guard) = setup_repo();
+
+    let binary_a: Vec<u8> = vec![0x00, 0x01, 0x02, 0xFF];
+    fs::write("bin.dat", &binary_a).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("b1", None, &mut out).unwrap();
+
+    let binary_b: Vec<u8> = vec![0x00, 0x01, 0x03, 0xFE];
+    fs::write("bin.dat", &binary_b).unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("b2", None, &mut out).unwrap();
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = ver::diff::diff_file(
+        "bin.dat",
+        Some("b1".to_string()),
+        "b2".to_string(),
+        &mut out,
+        &mut err,
+    );
+    assert!(result.is_ok());
+
+    let err_output = String::from_utf8(err).unwrap();
+    assert!(err_output.contains("do not appear to be text-based"));
+}
+
+#[test]
+#[serial]
+fn diff_output_contains_snapshot_labels() {
+    let (_tmp, _guard) = setup_repo();
+
+    fs::write("file.txt", "alpha\n").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("from_snap", None, &mut out).unwrap();
+
+    fs::write("file.txt", "beta\n").unwrap();
+    let mut out = Vec::new();
+    ver::files::snap("against_snap", None, &mut out).unwrap();
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let result = ver::diff::diff_file(
+        "file.txt",
+        Some("from_snap".to_string()),
+        "against_snap".to_string(),
+        &mut out,
+        &mut err,
+    );
+    assert!(result.is_ok());
+
+    let output = String::from_utf8(out).unwrap();
+    assert!(output.contains("from_snap"));
+    assert!(output.contains("against_snap"));
+}
+
 // ---------- edge cases and error handling ----------
 
 #[test]

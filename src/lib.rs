@@ -1,5 +1,6 @@
 pub mod commons;
 pub mod cp;
+pub mod diff;
 pub mod errors;
 pub mod files;
 pub mod init;

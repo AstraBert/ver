@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 
 use ver::{
     cp::copy as ver_copy,
+    diff::diff_file,
     errors::VerError,
     files::{goto, snap},
     init::initialize,
@@ -151,6 +152,19 @@ enum Commands {
         #[arg(long, short, default_value = None)]
         limit: Option<usize>,
     },
+
+    /// Diff a file between two snapshots
+    Diff {
+        /// Path to the file to diff
+        path: String,
+        /// Snapshot ID or name to diff from.
+        /// Defaults to the current HEAD snapshot
+        #[arg(long, short, default_value = None)]
+        from: Option<String>,
+        /// Snapshot ID or name to diff against
+        #[arg(long, short)]
+        against: String,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -202,6 +216,17 @@ fn main() -> Result<(), VerError> {
             let stderr = io::stderr();
             let mut err_handle = stderr.lock();
             show_file(&path, snapshot_id, offset, limit, handle, &mut err_handle)
+        }
+        Commands::Diff {
+            path,
+            from,
+            against,
+        } => {
+            let stdout = io::stdout();
+            let stderr = io::stderr();
+            let mut handle = stdout.lock();
+            let mut err_handle = stderr.lock();
+            diff_file(&path, from, against, &mut handle, &mut err_handle)
         }
         Commands::Merge { merge_cmd } => match merge_cmd {
             MergeCommands::Run {
