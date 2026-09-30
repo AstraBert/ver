@@ -1,31 +1,7 @@
-[package]
-name = "ver"
-version = "0.1.0-alpha"
-edition = "2024"
-readme = "README.md"
-description = "An intuitive, easy-to-use and non git-like version control system."
-license = "MIT"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
 
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-ignore = "0.4.25"
+[workspace.dependencies]
 blake3 = "1.8"
-postcard = { version = "1.1", features = ["alloc"] }
 redb = "4.2"
-rocksdb = "0.25"
-clap = { version = "4.6.7", features = ["derive"] }
-minus = { version = "5.8.0", optional = true, features = ["static_output"] }
-chrono = "0.4.45"
-dirs = "7.0.0"
-fs_extra = "1.3.0"
-diffy = "0.5.2"
-pretty-hex = { version = "0.4.2", optional = true }
-
-[features]
-minus = ["dep:minus"]
-pretty-hex = ["dep:pretty-hex"]
-
-[dev-dependencies]
-tempdir = "0.3.7"
-serial_test = "3"
