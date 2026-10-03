@@ -4,7 +4,6 @@ use postcard::Error as PostcardError;
 use redb::{
     CommitError, DatabaseError, Error as RedbError, StorageError, TableError, TransactionError,
 };
-use rocksdb::Error as RocksdbError;
 use std::{error::Error, fmt::Display, io};
 
 /// Internal error that abstracts errors from other
@@ -26,14 +25,6 @@ impl From<HexError> for VerError {
     fn from(value: HexError) -> Self {
         Self {
             message: format!("Invalid snapshot ID: {}", value),
-        }
-    }
-}
-
-impl From<RocksdbError> for VerError {
-    fn from(value: RocksdbError) -> Self {
-        Self {
-            message: format!("An error occurred with RocksDB: {}", value),
         }
     }
 }

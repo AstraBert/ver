@@ -1,0 +1,13 @@
+[package]
+name = "blobsdb"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+blake3 = { workspace = true }
+fastcdc = { version = "5.0.0", features = ["tokio", "tokio-stream"] }
+object_store = { version = "0.14", features = ["aws", "gcp", "azure"] }
+tokio = { workspace = true }
+tokio-stream = "0.1.19"
+serde = { workspace = true }
+async-compression = { version = "0.4.50", features = ["tokio", "zstd"] }

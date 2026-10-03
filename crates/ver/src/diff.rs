@@ -1,11 +1,17 @@
-use std::{env, io, str::FromStr};
+use std::{
+    env, io,
+    panic::AssertUnwindSafe,
+    str::FromStr,
+    sync::{Arc, mpsc},
+};
 
+use futures_util::FutureExt;
 use redb::{Database, ReadableDatabase};
 
 use crate::{
     commons::{get_head, resolve_ver_dir_path, to_text},
     errors::VerError,
-    files::{SNAPSHOT_TABLE, Snapshot},
+    files::{SNAPSHOT_TABLE, Snapshot, panic_msg, rt},
     init::{REDB_PATH, init_blobs_db},
     named::get_snapshot_by_name,
 };
@@ -31,7 +37,7 @@ fn resolve_snapshot(
     }
 }
 
-fn get_file_content(
+async fn get_file_content(
     resolved: &std::path::Path,
     snap: &Snapshot,
     path: &str,
@@ -40,8 +46,8 @@ fn get_file_content(
 
     if let Some(ha) = path_hash {
         let blobdb = init_blobs_db(resolved)?;
-        let opt = blobdb.get(ha)?;
-        return Ok(opt);
+        let opt = blobdb.get(Arc::new(ha.to_owned())).await?;
+        return Ok(Some(opt));
     }
 
     Ok(None)
@@ -81,16 +87,66 @@ pub fn diff_file<O: io::Write, E: io::Write>(
 
     let snap_against: Snapshot = resolve_snapshot(&redb, &table, &against)?;
 
-    let content_from = get_file_content(&resolved, &snap_from, path)?;
-    let content_against = get_file_content(&resolved, &snap_against, path)?;
+    let (tx, rx) = mpsc::channel::<(bool, Result<Option<Vec<u8>>, VerError>)>();
+
+    let tx1 = tx.clone();
+    let resolved1 = resolved.clone();
+    let path1 = path.to_owned();
+
+    rt().spawn(async move {
+        let res =
+            match AssertUnwindSafe(
+                async move { get_file_content(&resolved1, &snap_from, &path1).await },
+            )
+            .catch_unwind()
+            .await
+            {
+                Ok(r) => r,
+                Err(payload) => Err(VerError {
+                    message: panic_msg(payload),
+                }),
+            };
+        tx1.send((true, res))
+    });
+
+    let tx2 = tx.clone();
+    let resolved2 = resolved.clone();
+    let path2 = path.to_owned();
+
+    rt().spawn(async move {
+        let res = match AssertUnwindSafe(async move {
+            get_file_content(&resolved2, &snap_against, &path2).await
+        })
+        .catch_unwind()
+        .await
+        {
+            Ok(r) => r,
+            Err(payload) => Err(VerError {
+                message: panic_msg(payload),
+            }),
+        };
+        tx2.send((false, res))
+    });
+
+    drop(tx);
+
+    let mut content_from = None;
+    let mut content_against = None;
+
+    for (is_from, r) in rx {
+        if r.is_err() {
+            return Err(r.unwrap_err());
+        }
+        if is_from {
+            content_from = r.unwrap();
+        } else {
+            content_against = r.unwrap();
+        }
+    }
 
     match (content_from, content_against) {
         (None, None) => {
-            return Err(format!(
-                "Could not find {} in either snapshot",
-                path
-            )
-            .into());
+            return Err(format!("Could not find {} in either snapshot", path).into());
         }
         (None, Some(_)) => {
             writeln!(

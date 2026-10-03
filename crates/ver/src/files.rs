@@ -1,12 +1,18 @@
+use blobsdb::Chunk;
+use futures_util::FutureExt;
 use redb::{Database, ReadableDatabase, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::{
+    any::Any,
     collections::HashMap,
     env, fs,
     io::{self, Write},
+    panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::{Arc, OnceLock, mpsc},
 };
+use tokio::{runtime::Runtime, sync::Semaphore};
 extern crate alloc;
 use alloc::vec::Vec as AllocVec;
 
@@ -18,11 +24,35 @@ use crate::{
 };
 
 pub const SNAPSHOT_TABLE: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("snapshots");
+pub const MAX_INFLIGHT_WRITES: usize = 16;
+pub const MAX_INFLIGHT_READS: usize = 256;
+
+pub static RT: OnceLock<Runtime> = OnceLock::new();
+
+pub fn rt() -> &'static Runtime {
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .unwrap()
+    })
+}
+
+pub fn panic_msg(p: Box<dyn Any + Send>) -> String {
+    if let Some(s) = p.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = p.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     pub parent_ids: Vec<[u8; 32]>,
-    pub repository_state: HashMap<String, [u8; 32]>,
+    pub repository_state: HashMap<String, Vec<Chunk>>,
 }
 
 fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
@@ -30,28 +60,54 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
     let repo = resolved.parent().unwrap();
-    let blobdb = init_blobs_db(&resolved)?;
+    let blobdb = Arc::new(init_blobs_db(&resolved)?);
 
     let files = collect_files(&[&*repo.to_string_lossy()])?;
 
-    let mut repo_state: HashMap<String, [u8; 32]> = HashMap::new();
+    let mut repo_state: HashMap<String, Vec<Chunk>> = HashMap::new();
 
-    for f in files {
-        let content = fs::read(&f)?;
-        let hash = blake3::hash(&content).as_bytes().to_owned();
+    let sem = Arc::new(Semaphore::new(MAX_INFLIGHT_WRITES));
+    let (tx, rx) = mpsc::channel::<(usize, Result<Vec<Chunk>, String>)>();
 
-        let rel = f
-            .strip_prefix(repo)
-            .expect("Repository should always be parent to its files");
+    for (i, f) in files.clone().into_iter().enumerate() {
+        let tx = tx.clone();
+        // Blocks the calling (sync) thread until a slot is free
+        let permit = rt()
+            .block_on(Arc::clone(&sem).acquire_owned())
+            .expect("semaphore closed");
+        let db = blobdb.clone();
 
-        // store the relative path
-        // so on merges we can compare
-        // with other copies
-        // of the same repo
-        repo_state.insert(rel.to_string_lossy().to_string(), hash);
+        rt().spawn(async move {
+            let _permit = permit; // moved in, released when the task ends
+            let res = match AssertUnwindSafe(async move { db.put(&f).await })
+                .catch_unwind()
+                .await
+            {
+                Ok(r) => r,
+                Err(payload) => Err(panic_msg(payload)),
+            };
+            let _ = tx.send((i, res));
+        });
+    }
 
-        // insert in blob db
-        blobdb.put(hash, content)?;
+    drop(tx);
+
+    let mut out: Vec<Option<_>> = (0..files.len()).map(|_| None).collect();
+    for (i, res) in rx {
+        out[i] = Some(res);
+    }
+    let results = out
+        .into_iter()
+        .map(|slot| slot.unwrap_or(Err("Lost file".to_string())))
+        .collect::<Vec<Result<Vec<Chunk>, String>>>();
+
+    for (n, r) in results.into_iter().enumerate() {
+        if r.is_err() {
+            return Err(r.unwrap_err().into());
+        }
+        let rel = files[n].strip_prefix(repo).expect("Should strip prefix");
+        let chunks = r.unwrap();
+        repo_state.insert(rel.to_string_lossy().to_string(), chunks);
     }
 
     let maybe_parent_id = get_head(&resolved)?;
@@ -175,17 +231,13 @@ pub fn snap<O: io::Write>(
     Ok(())
 }
 
-pub fn goto<S: AsRef<str>, E: io::Write>(
-    snapshot_id: &str,
-    paths: Option<Vec<S>>,
-    std_err: &mut E,
-) -> Result<(), VerError> {
+pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(), VerError> {
     // open databases
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
     let repo = resolved.parent().unwrap();
     let redb = Database::open(resolved.join(REDB_PATH))?;
-    let blobdb = init_blobs_db(&resolved)?;
+    let blobdb = Arc::new(init_blobs_db(&resolved)?);
 
     let maybe_hash = blake3::Hash::from_str(snapshot_id);
 
@@ -200,21 +252,41 @@ pub fn goto<S: AsRef<str>, E: io::Write>(
 
     if let Some(entry) = maybe_entry {
         let decompressed: Snapshot = postcard::from_bytes(entry.value())?;
+        let state = decompressed
+            .repository_state
+            .into_iter()
+            .map(|(k, v)| (k, Arc::new(v)))
+            .collect::<HashMap<String, Arc<Vec<Chunk>>>>();
 
         if let Some(ref pas) = paths {
             let ps = collect_files(pas)?;
+            let sem = Arc::new(Semaphore::new(MAX_INFLIGHT_READS));
+            let (tx, rx) = mpsc::channel::<(PathBuf, Result<Vec<u8>, String>)>();
+
             for p in ps {
                 let rel = p
                     .strip_prefix(repo)
                     .expect("Repository should always contain its files");
                 let str_p = &*rel.to_string_lossy();
-                if let Some(f) = decompressed.repository_state.get(str_p) {
-                    let opt = blobdb.get(f)?;
-                    if let Some(content) = opt {
-                        fs::write(p, content)?;
-                    } else {
-                        writeln!(std_err, "Could not find snapshotted content for: {}", str_p)?;
-                    }
+                if let Some(f) = state.get(str_p).cloned() {
+                    let tx = tx.clone();
+                    // Blocks the calling (sync) thread until a slot is free
+                    let permit = rt()
+                        .block_on(Arc::clone(&sem).acquire_owned())
+                        .expect("semaphore closed");
+                    let db = blobdb.clone();
+
+                    rt().spawn(async move {
+                        let _permit = permit; // moved in, released when the task ends
+                        let res = match AssertUnwindSafe(async move { db.get(f).await })
+                            .catch_unwind()
+                            .await
+                        {
+                            Ok(r) => r,
+                            Err(payload) => Err(panic_msg(payload)),
+                        };
+                        let _ = tx.send((p, res));
+                    });
                 } else {
                     // not in snapshot or does not exist, so try deleting
                     // or skip if it does not exist
@@ -228,26 +300,59 @@ pub fn goto<S: AsRef<str>, E: io::Write>(
                     }
                 }
             }
+
+            drop(tx);
+
+            for (fl, res) in rx {
+                if res.is_err() {
+                    return Err(res.unwrap_err().into());
+                }
+                fs::write(fl, res.unwrap())?;
+            }
         } else {
             let ps = collect_files(&[&*repo.to_string_lossy()])?;
+            let sem = Arc::new(Semaphore::new(MAX_INFLIGHT_READS));
+            let (tx, rx) = mpsc::channel::<(PathBuf, Result<Vec<u8>, String>)>();
+
             for p in ps {
                 let rel = p
                     .strip_prefix(repo)
                     .expect("Repository should always contain its files");
                 let str_p = &*rel.to_string_lossy();
-                if let Some(f) = decompressed.repository_state.get(str_p) {
-                    let opt = blobdb.get(f)?;
-                    if let Some(content) = opt {
-                        fs::write(p, content)?;
-                    } else {
-                        writeln!(std_err, "Could not find snapshotted content for: {}", str_p)?;
-                    }
+                if let Some(f) = state.get(str_p).cloned() {
+                    let tx = tx.clone();
+                    // Blocks the calling (sync) thread until a slot is free
+                    let permit = rt()
+                        .block_on(Arc::clone(&sem).acquire_owned())
+                        .expect("semaphore closed");
+                    let db = blobdb.clone();
+
+                    rt().spawn(async move {
+                        let _permit = permit; // moved in, released when the task ends
+                        let res = match AssertUnwindSafe(async move { db.get(f).await })
+                            .catch_unwind()
+                            .await
+                        {
+                            Ok(r) => r,
+                            Err(payload) => Err(panic_msg(payload)),
+                        };
+                        let _ = tx.send((p, res));
+                    });
                 } else {
                     // not in snapshot, so delete
                     let res = fs::remove_file(p);
                     // ignore not found files
                     if res.is_err_and(|e| matches!(e.kind(), io::ErrorKind::NotFound)) {}
                 }
+            }
+
+            drop(tx);
+
+            for (fl, res) in rx {
+                if res.is_err() {
+                    return Err(res.unwrap_err().into());
+                }
+                fs::write(fl, res.unwrap())?;
             }
         }
 
