@@ -3,28 +3,26 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use blobsdb::{BlobsDB, get_object_store};
 use redb::{Database, Error as RedbError};
-use rocksdb::{DB, Error as RocksDBError, Options};
 
 use crate::errors::VerError;
 
 pub const VER_DIRECTORY: &str = ".ver";
 pub const SNAPSHOT_HISTORY_FILE: &str = "snapshot_history";
 pub const REDB_PATH: &str = "files.redb";
-pub const BLOBDB_PATH: &str = "blobs.db";
+pub const BLOBDB_PATH: &str = "blobs";
 pub const HEAD_PATH: &str = "head";
 
-pub fn init_blobs_db(base_path: &Path) -> Result<DB, RocksDBError> {
-    let mut opts = Options::default();
-    opts.create_if_missing(true);
+pub fn init_blobs_db(base_path: &Path) -> Result<BlobsDB, VerError> {
+    let store = get_object_store(blobsdb::GetObjectStoreInput::Local)?;
+    let p = base_path.join(BLOBDB_PATH);
 
-    opts.set_enable_blob_files(true); // turns on key-value separation
-    opts.set_min_blob_size(1024); // values ≥ this size go to blob files
-    opts.set_blob_file_size(256 * 1024 * 1024); // size cap per blob file
-    opts.set_blob_compression_type(rocksdb::DBCompressionType::Zstd);
-    opts.set_enable_blob_gc(true); // reclaim space from stale blobs during compaction
+    if !p.exists() {
+        fs::create_dir_all(&p)?;
+    }
 
-    let db = DB::open(&opts, base_path.join(BLOBDB_PATH))?;
+    let db = BlobsDB::new(&p, store)?;
 
     Ok(db)
 }

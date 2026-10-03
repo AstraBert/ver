@@ -192,11 +192,7 @@ fn main() -> Result<(), VerError> {
             let handle = stdout.lock();
             log(head, handle)
         }
-        Commands::Goto { snapshot_id, paths } => {
-            let stderr = io::stderr();
-            let mut err_handle = stderr.lock();
-            goto(&snapshot_id, paths, &mut err_handle)
-        }
+        Commands::Goto { snapshot_id, paths } => goto(&snapshot_id, paths),
         Commands::Cp {
             snapshot_id,
             destination,

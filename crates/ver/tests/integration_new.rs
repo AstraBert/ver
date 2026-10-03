@@ -1484,13 +1484,7 @@ fn diff_defaults_from_to_head() {
     // HEAD is now "second", diff against "first"
     let mut out = Vec::new();
     let mut err = Vec::new();
-    let result = ver::diff::diff_file(
-        "file.txt",
-        None,
-        "first".to_string(),
-        &mut out,
-        &mut err,
-    );
+    let result = ver::diff::diff_file("file.txt", None, "first".to_string(), &mut out, &mut err);
     assert!(result.is_ok());
 
     let output = String::from_utf8(out).unwrap();
@@ -1646,13 +1640,7 @@ fn diff_no_snapshots_errors() {
 
     let mut out = Vec::new();
     let mut err = Vec::new();
-    let result = ver::diff::diff_file(
-        "file.txt",
-        None,
-        "anything".to_string(),
-        &mut out,
-        &mut err,
-    );
+    let result = ver::diff::diff_file("file.txt", None, "anything".to_string(), &mut out, &mut err);
     assert!(result.is_err());
 }
 
@@ -1763,11 +1751,9 @@ fn goto_with_multiple_specific_paths() {
     fs::write("two.txt", "two-v2").unwrap();
     fs::write("three.txt", "three-v2").unwrap();
 
-    let mut err = Vec::new();
     ver::files::goto(
         "v1",
         Some(vec!["one.txt".to_string(), "three.txt".to_string()]),
-        &mut err,
     )
     .unwrap();
 
@@ -1790,8 +1776,7 @@ fn snapshot_with_binary_file() {
 
     // Modify and restore
     fs::write("binary.bin", b"different").unwrap();
-    let mut err = Vec::new();
-    ver::files::goto::<String, _>("binary", None, &mut err).unwrap();
+    ver::files::goto::<String, _>("binary", None).unwrap();
 
     let restored = fs::read("binary.bin").unwrap();
     assert_eq!(restored, binary_content);
@@ -1807,8 +1792,7 @@ fn snapshot_with_empty_file() {
     ver::files::snap("empty", None, &mut out).unwrap();
 
     fs::write("empty.txt", "now has content").unwrap();
-    let mut err = Vec::new();
-    ver::files::goto::<String, _>("empty", None, &mut err).unwrap();
+    ver::files::goto::<String, _>("empty", None).unwrap();
 
     assert_eq!(fs::read_to_string("empty.txt").unwrap(), "");
 }
@@ -1826,8 +1810,7 @@ fn snapshot_with_unicode_filename() {
     assert!(result.is_ok());
 
     fs::write("файл.txt", "modified").unwrap();
-    let mut err = Vec::new();
-    ver::files::goto::<String, _>("unicode", None, &mut err).unwrap();
+    ver::files::goto::<String, _>("unicode", None).unwrap();
 
     assert_eq!(fs::read_to_string("файл.txt").unwrap(), "unicode content");
 }
@@ -1846,8 +1829,7 @@ fn snapshot_with_deeply_nested_structure() {
     assert!(result.is_ok());
 
     fs::write(deep_path, "modified").unwrap();
-    let mut err = Vec::new();
-    ver::files::goto::<String, _>("deep", None, &mut err).unwrap();
+    ver::files::goto::<String, _>("deep", None).unwrap();
 
     assert_eq!(fs::read_to_string(deep_path).unwrap(), "deep content");
 }
@@ -1870,8 +1852,7 @@ fn verignore_with_patterns() {
     fs::write("cache.tmp", "modified cache").unwrap();
     fs::write("tracked.txt", "modified tracked").unwrap();
 
-    let mut err = Vec::new();
-    ver::files::goto::<String, _>("ignore_test", None, &mut err).unwrap();
+    ver::files::goto::<String, _>("ignore_test", None).unwrap();
 
     // Ignored files should keep modifications
     assert_eq!(fs::read_to_string("debug.log").unwrap(), "modified log");
@@ -1902,8 +1883,7 @@ fn goto_updates_head() {
     let head2 = ver::commons::get_head(&resolved).unwrap().unwrap();
     assert_ne!(head1, head2);
 
-    let mut err = Vec::new();
-    ver::files::goto::<String, _>("first", None, &mut err).unwrap();
+    ver::files::goto::<String, _>("first", None).unwrap();
 
     let head_after_goto = ver::commons::get_head(&resolved).unwrap().unwrap();
     assert_eq!(head_after_goto, head1);
@@ -1927,10 +1907,8 @@ fn multiple_snapshots_same_content() {
     assert!(history.contains("snap2"));
 
     // Both should be resolvable
-    let mut err = Vec::new();
-    ver::files::goto::<String, _>("snap1", None, &mut err).unwrap();
-    let mut err = Vec::new();
-    ver::files::goto::<String, _>("snap2", None, &mut err).unwrap();
+    ver::files::goto::<String, _>("snap1", None).unwrap();
+    ver::files::goto::<String, _>("snap2", None).unwrap();
 }
 
 #[test]
@@ -1953,8 +1931,7 @@ fn snapshot_name_with_special_characters() {
         let result = ver::files::snap(name, None, &mut out);
         assert!(result.is_ok(), "Failed to snap with name: {}", name);
 
-        let mut err = Vec::new();
-        let goto_result = ver::files::goto::<String, _>(name, None, &mut err);
+        let goto_result = ver::files::goto::<String, _>(name, None);
         assert!(goto_result.is_ok(), "Failed to goto with name: {}", name);
     }
 }
