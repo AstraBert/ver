@@ -45,7 +45,7 @@ fn init_creates_ver_directory_structure() {
     assert!(ver_dir.exists());
     assert!(ver_dir.join(SNAPSHOT_HISTORY_FILE).exists());
     assert!(ver_dir.join("files.redb").exists());
-    assert!(ver_dir.join("blobs.db").exists());
+    assert!(ver_dir.join("blobs").is_dir());
 }
 
 #[test]
@@ -74,10 +74,10 @@ fn snap_and_goto_roundtrip_restores_file_content() {
     let mut out = Vec::new();
     ver::files::snap("second", None, &mut out).unwrap();
 
-    ver::files::goto::<String, _>("first", None).unwrap();
+    ver::files::goto::<String>("first", None).unwrap();
     assert_eq!(fs::read_to_string("hello.txt").unwrap(), "version 1");
 
-    ver::files::goto::<String, _>("second", None).unwrap();
+    ver::files::goto::<String>("second", None).unwrap();
     assert_eq!(fs::read_to_string("hello.txt").unwrap(), "version 2");
 }
 
@@ -115,7 +115,7 @@ fn goto_by_snapshot_id_hash_works() {
         .to_string();
 
     fs::write("a.txt", "changed").unwrap();
-    ver::files::goto::<String, _>(&hash, None).unwrap();
+    ver::files::goto::<String>(&hash, None).unwrap();
     assert_eq!(fs::read_to_string("a.txt").unwrap(), "alpha");
 }
 
@@ -129,7 +129,7 @@ fn goto_removes_files_not_in_snapshot() {
     ver::files::snap("base", None, &mut out).unwrap();
 
     fs::write("extra.txt", "should be deleted").unwrap();
-    ver::files::goto::<String, _>("base", None).unwrap();
+    ver::files::goto::<String>("base", None).unwrap();
 
     assert!(!Path::new("extra.txt").exists());
     assert_eq!(fs::read_to_string("keep.txt").unwrap(), "keep me");
@@ -158,7 +158,7 @@ fn goto_with_specific_paths_only_reverts_those() {
 #[serial]
 fn goto_nonexistent_snapshot_returns_error() {
     let (_tmp, _guard) = setup_repo();
-    let result = ver::files::goto::<String, _>("nonexistent", None);
+    let result = ver::files::goto::<String>("nonexistent", None);
     assert!(result.is_err());
 }
 
@@ -180,7 +180,7 @@ fn verignore_excludes_files_from_snapshot() {
     fs::write("ignored.txt", "modified-secret").unwrap();
     fs::write("tracked.txt", "modified-tracked").unwrap();
 
-    ver::files::goto::<String, _>("s1", None).unwrap();
+    ver::files::goto::<String>("s1", None).unwrap();
 
     // ignored.txt was never snapshotted and is excluded by .verignore,
     // so goto leaves it untouched
@@ -207,10 +207,10 @@ fn snapshot_names_resolve_to_correct_ids() {
     let mut out = Vec::new();
     ver::files::snap("beta", None, &mut out).unwrap();
 
-    ver::files::goto::<String, _>("alpha", None).unwrap();
+    ver::files::goto::<String>("alpha", None).unwrap();
     assert_eq!(fs::read_to_string("f.txt").unwrap(), "content-a");
 
-    ver::files::goto::<String, _>("beta", None).unwrap();
+    ver::files::goto::<String>("beta", None).unwrap();
     assert_eq!(fs::read_to_string("f.txt").unwrap(), "content-b");
 }
 

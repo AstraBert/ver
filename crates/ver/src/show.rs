@@ -1,11 +1,11 @@
-use std::{env, io, str::FromStr};
+use std::{env, io, str::FromStr, sync::Arc};
 
 use redb::{Database, ReadableDatabase};
 
 use crate::{
     commons::{get_head, resolve_ver_dir_path, to_text},
     errors::VerError,
-    files::{SNAPSHOT_TABLE, Snapshot},
+    files::{SNAPSHOT_TABLE, Snapshot, rt},
     init::{REDB_PATH, init_blobs_db},
     named::get_snapshot_by_name,
 };
@@ -80,8 +80,8 @@ pub fn show_file<O: io::Write, E: io::Write>(
 
     if let Some(ha) = path_hash {
         let blobdb = init_blobs_db(&resolved)?;
-        let opt = blobdb.get(ha)?;
-        if let Some(content) = opt {
+        let opt = rt().block_on(async { blobdb.get(Arc::new(ha.to_owned())).await });
+        if let Ok(content) = opt {
             let offset = offset.unwrap_or_default();
             let limit = content.len().min(limit.unwrap_or(content.len()));
             let new_cont = &content[offset..limit];
@@ -95,7 +95,7 @@ pub fn show_file<O: io::Write, E: io::Write>(
                 hexdump(new_cont, out)?;
             }
         } else {
-            return Err(format!("Could not find content of {} in blobsdb", path).into());
+            return Err(opt.unwrap_err().into());
         }
 
         return Ok(());

@@ -231,10 +231,7 @@ pub fn snap<O: io::Write>(
     Ok(())
 }
 
-pub fn goto<S: AsRef<str>, E: io::Write>(
-    snapshot_id: &str,
-    paths: Option<Vec<S>>,
-) -> Result<(), VerError> {
+pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(), VerError> {
     // open databases
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;

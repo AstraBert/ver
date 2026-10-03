@@ -21,7 +21,7 @@ pub const MAX_CHUNK_SIZE: usize = 16_384;
 pub const MAX_CONCURRENT_READS: usize = 256;
 pub const MAX_CONCURRENT_WRITES: usize = 16;
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Eq, PartialEq)]
 pub struct Chunk {
     pub offset: u64,
     pub length: usize,

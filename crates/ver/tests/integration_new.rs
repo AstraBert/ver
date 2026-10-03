@@ -110,7 +110,7 @@ fn cp_copies_ver_directory() {
 
     assert!(dest_path.join(VER_DIRECTORY).exists());
     assert!(dest_path.join(VER_DIRECTORY).join(REDB_PATH).exists());
-    assert!(dest_path.join(VER_DIRECTORY).join("blobs.db").exists());
+    assert!(dest_path.join(VER_DIRECTORY).join("blobs").is_dir());
     assert!(
         dest_path
             .join(VER_DIRECTORY)
@@ -1776,7 +1776,7 @@ fn snapshot_with_binary_file() {
 
     // Modify and restore
     fs::write("binary.bin", b"different").unwrap();
-    ver::files::goto::<String, _>("binary", None).unwrap();
+    ver::files::goto::<String>("binary", None).unwrap();
 
     let restored = fs::read("binary.bin").unwrap();
     assert_eq!(restored, binary_content);
@@ -1792,7 +1792,7 @@ fn snapshot_with_empty_file() {
     ver::files::snap("empty", None, &mut out).unwrap();
 
     fs::write("empty.txt", "now has content").unwrap();
-    ver::files::goto::<String, _>("empty", None).unwrap();
+    ver::files::goto::<String>("empty", None).unwrap();
 
     assert_eq!(fs::read_to_string("empty.txt").unwrap(), "");
 }
@@ -1810,7 +1810,7 @@ fn snapshot_with_unicode_filename() {
     assert!(result.is_ok());
 
     fs::write("файл.txt", "modified").unwrap();
-    ver::files::goto::<String, _>("unicode", None).unwrap();
+    ver::files::goto::<String>("unicode", None).unwrap();
 
     assert_eq!(fs::read_to_string("файл.txt").unwrap(), "unicode content");
 }
@@ -1829,7 +1829,7 @@ fn snapshot_with_deeply_nested_structure() {
     assert!(result.is_ok());
 
     fs::write(deep_path, "modified").unwrap();
-    ver::files::goto::<String, _>("deep", None).unwrap();
+    ver::files::goto::<String>("deep", None).unwrap();
 
     assert_eq!(fs::read_to_string(deep_path).unwrap(), "deep content");
 }
@@ -1852,7 +1852,7 @@ fn verignore_with_patterns() {
     fs::write("cache.tmp", "modified cache").unwrap();
     fs::write("tracked.txt", "modified tracked").unwrap();
 
-    ver::files::goto::<String, _>("ignore_test", None).unwrap();
+    ver::files::goto::<String>("ignore_test", None).unwrap();
 
     // Ignored files should keep modifications
     assert_eq!(fs::read_to_string("debug.log").unwrap(), "modified log");
@@ -1883,7 +1883,7 @@ fn goto_updates_head() {
     let head2 = ver::commons::get_head(&resolved).unwrap().unwrap();
     assert_ne!(head1, head2);
 
-    ver::files::goto::<String, _>("first", None).unwrap();
+    ver::files::goto::<String>("first", None).unwrap();
 
     let head_after_goto = ver::commons::get_head(&resolved).unwrap().unwrap();
     assert_eq!(head_after_goto, head1);
@@ -1907,8 +1907,8 @@ fn multiple_snapshots_same_content() {
     assert!(history.contains("snap2"));
 
     // Both should be resolvable
-    ver::files::goto::<String, _>("snap1", None).unwrap();
-    ver::files::goto::<String, _>("snap2", None).unwrap();
+    ver::files::goto::<String>("snap1", None).unwrap();
+    ver::files::goto::<String>("snap2", None).unwrap();
 }
 
 #[test]
@@ -1931,7 +1931,7 @@ fn snapshot_name_with_special_characters() {
         let result = ver::files::snap(name, None, &mut out);
         assert!(result.is_ok(), "Failed to snap with name: {}", name);
 
-        let goto_result = ver::files::goto::<String, _>(name, None);
+        let goto_result = ver::files::goto::<String>(name, None);
         assert!(goto_result.is_ok(), "Failed to goto with name: {}", name);
     }
 }
