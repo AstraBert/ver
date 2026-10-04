@@ -23,6 +23,7 @@ diffy = "0.5.2"
 pretty-hex = { version = "0.4.2", optional = true }
 tokio = { workspace = true }
 futures-util = "0.3.34"
+age = { version = "0.12.1", features = ["armor"] }
 
 [features]
 minus = ["dep:minus"]

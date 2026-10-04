@@ -1,10 +1,11 @@
+use age::{DecryptError, EncryptError, IdentityFileConvertError};
 use blake3::HexError;
 use ignore::Error as IgnoreError;
 use postcard::Error as PostcardError;
 use redb::{
     CommitError, DatabaseError, Error as RedbError, StorageError, TableError, TransactionError,
 };
-use std::{error::Error, fmt::Display, io};
+use std::{error::Error, fmt::Display, io, string::FromUtf8Error};
 
 /// Internal error that abstracts errors from other
 /// crates
@@ -145,6 +146,49 @@ impl From<std::fmt::Error> for VerError {
     fn from(value: std::fmt::Error) -> Self {
         Self {
             message: format!("Formatting error: {}", value),
+        }
+    }
+}
+
+impl From<IdentityFileConvertError> for VerError {
+    fn from(value: IdentityFileConvertError) -> Self {
+        Self {
+            message: format!(
+                "Error while writing the recipients file from the provided key file: {}",
+                value
+            ),
+        }
+    }
+}
+
+impl From<EncryptError> for VerError {
+    fn from(value: EncryptError) -> Self {
+        Self {
+            message: format!("age encryption error: {}", value),
+        }
+    }
+}
+
+impl From<DecryptError> for VerError {
+    fn from(value: DecryptError) -> Self {
+        Self {
+            message: format!("age decryption error: {}", value),
+        }
+    }
+}
+
+impl From<FromUtf8Error> for VerError {
+    fn from(value: FromUtf8Error) -> Self {
+        Self {
+            message: format!("Error while converting raw bytes to UTF-8: {}", value),
+        }
+    }
+}
+
+impl From<serde_json::Error> for VerError {
+    fn from(value: serde_json::Error) -> Self {
+        Self {
+            message: format!("Serialization/deserlization error: {}", value),
         }
     }
 }

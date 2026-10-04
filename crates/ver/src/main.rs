@@ -10,6 +10,7 @@ use ver::{
     init::initialize,
     log::log,
     merge::{merge_end, merge_pick, merge_run},
+    secrets::{add_recipient, get_secret, init_secrets, set_secret},
     show::show_file,
 };
 
@@ -68,6 +69,74 @@ enum MergeCommands {
         /// Name of the merge
         /// to finalize
         name: String,
+    },
+}
+
+/// Secrets-related subcommands
+#[derive(Debug, Subcommand)]
+enum SecretsCommands {
+    /// Initialize secrets management
+    /// for ver globally.
+    /// If you need multiple secrets
+    /// managed with different keys,
+    /// provide `--key-file`, otherwise
+    /// a global key pair will be provisioned
+    /// to manage all ver secrets.
+    Init {
+        /// Name of the recipient identity
+        /// to associate with the
+        /// key
+        recipient_name: String,
+        /// File where a x25519 age key pair
+        /// is stored. Leave empty to generate
+        /// a new key pair for global
+        /// management of ver-related secrets.
+        #[arg(long, short, default_value = None)]
+        key_file: Option<String>,
+    },
+    /// Set a secret locally in your repository.
+    /// Creates .versecrets.json at the root
+    /// of your repository if it does not already
+    /// exists
+    Set {
+        /// Secret name
+        secret_name: String,
+        /// Secret value
+        secret_value: String,
+    },
+    /// Get the decrypted value of a secret,
+    /// using either a private key provided
+    /// under a key file or a the global
+    /// key generated with `init`
+    Get {
+        secret_name: String,
+        /// File where a x25519 age key pair
+        /// is stored. Leave empty to use the
+        /// key pair for global
+        /// management of ver-related secrets
+        /// generated with `init`
+        #[arg(long, short, default_value = None)]
+        key_file: Option<String>,
+    },
+    /// Add a new recipient identity
+    /// that can access the secrets
+    /// by providing their public
+    /// key
+    AddRecipient {
+        /// Name to associate with the recipient
+        /// identity
+        recipient_name: String,
+        /// Public key for the recipient
+        public_key: String,
+        /// File where a x25519 age key pair
+        /// is stored to decrypt existing secrets
+        /// and re-encrypt them with the new recipient.
+        /// Leave empty to use the
+        /// key pair for global
+        /// management of ver-related secrets
+        /// generated with `init`
+        #[arg(long, short, default_value = None)]
+        key_file: Option<String>,
     },
 }
 
@@ -164,6 +233,12 @@ enum Commands {
         /// Snapshot ID or name to diff against
         #[arg(long, short)]
         against: String,
+    },
+
+    /// Subcommands for secrets management
+    Secrets {
+        #[command(subcommand)]
+        secret_cmd: SecretsCommands,
     },
 }
 
@@ -270,6 +345,42 @@ fn main() -> Result<(), VerError> {
                 let mut handle = stdout.lock();
                 let mut err_handle = stderr.lock();
                 merge_end(&name, &mut handle, &mut err_handle)
+            }
+        },
+        Commands::Secrets { secret_cmd } => match secret_cmd {
+            SecretsCommands::AddRecipient {
+                recipient_name,
+                public_key,
+                key_file,
+            } => {
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+                add_recipient(recipient_name, public_key, key_file, &mut handle)
+            }
+            SecretsCommands::Get {
+                secret_name,
+                key_file,
+            } => {
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+                let _ = get_secret(&secret_name, key_file, true, &mut handle)?;
+                Ok(())
+            }
+            SecretsCommands::Init {
+                recipient_name,
+                key_file,
+            } => {
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+                init_secrets(key_file, recipient_name, &mut handle)
+            }
+            SecretsCommands::Set {
+                secret_name,
+                secret_value,
+            } => {
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+                set_secret(&secret_name, &secret_value, &mut handle)
             }
         },
     }
