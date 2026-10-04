@@ -321,8 +321,11 @@ dependencies = [
  "fastcdc",
  "object_store",
  "serde",
+ "serde_json",
+ "tempdir",
  "tokio",
  "tokio-stream",
+ "tokio-util",
 ]
 
 [[package]]
