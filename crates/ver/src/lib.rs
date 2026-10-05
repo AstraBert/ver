@@ -9,3 +9,4 @@ pub mod merge;
 pub mod named;
 pub mod secrets;
 pub mod show;
+pub mod sync;

@@ -1,5 +1,6 @@
 use std::io;
 
+use blobsdb::GetObjectStoreInput;
 use clap::{Parser, Subcommand};
 
 use ver::{
@@ -12,6 +13,7 @@ use ver::{
     merge::{merge_end, merge_pick, merge_run},
     secrets::{add_recipient, get_secret, init_secrets, set_secret},
     show::show_file,
+    sync::sync_with_remote_storage,
 };
 
 #[derive(Debug, Subcommand)]
@@ -140,6 +142,92 @@ enum SecretsCommands {
     },
 }
 
+/// Sync-related subcommands
+#[derive(Debug, Subcommand)]
+enum SyncCommands {
+    /// Sync with S3.
+    /// Leave all optional arguments
+    /// blank to infer the configuration
+    /// from the environment.
+    /// Prefix a value with `secrets/` to
+    /// load from local secrets (`.versecrets.json`)
+    S3 {
+        /// Access key ID for the secret access key
+        #[arg(short, long, default_value = None)]
+        access_key_id: Option<String>,
+        /// Secret access key
+        #[arg(short, long, default_value = None)]
+        secret_access_key: Option<String>,
+        /// Region for the S3 deployments
+        #[arg(short, long, default_value = None)]
+        region: Option<String>,
+        /// S3 Endpoint
+        #[arg(short, long, default_value = None)]
+        endpoint: Option<String>,
+        /// Name of the bucket where
+        /// this repository should be stored.
+        /// Assumes one bucket per repository.
+        #[arg(short, long)]
+        bucket: String,
+        /// File where a x25519 age key pair
+        /// is stored. Leave empty to generate
+        /// a new key pair for global
+        /// management of ver-related secrets.
+        #[arg(long, short, default_value = None)]
+        key_file: Option<String>,
+    },
+    /// Sync with Google Cloud Storage.
+    /// Leave all optional arguments
+    /// blank to infer the configuration
+    /// from the environment.
+    /// Prefix a value with `secrets/` to
+    /// load from local secrets (`.versecrets.json`)
+    GCS {
+        /// Path to the service account credentials file
+        #[arg(short, long, default_value = None)]
+        service_account_credentials_path: Option<String>,
+        /// Name of the bucket where
+        /// this repository should be stored.
+        /// Assumes one bucket per repository
+        #[arg(short, long)]
+        bucket: String,
+        /// File where a x25519 age key pair
+        /// is stored. Leave empty to generate
+        /// a new key pair for global
+        /// management of ver-related secrets.
+        #[arg(long, short, default_value = None)]
+        key_file: Option<String>,
+    },
+    /// Sync with Azure Blob Storage.
+    /// Leave all optional arguments
+    /// blank to infer the configuration
+    /// from the environment.
+    /// Prefix a value with `secrets/` to
+    /// load from local secrets (`.versecrets.json`)
+    Azure {
+        /// Account connected to Azure Blob Storage
+        #[arg(long, default_value = None)]
+        account_name: Option<String>,
+        /// Secret key associated with the account
+        #[arg(long, default_value = None)]
+        account_key: Option<String>,
+        /// Azure Blob Storage endpoint
+        #[arg(short, long, default_value = None)]
+        endpoint: Option<String>,
+        /// Name of the container where
+        /// this repository should be stored.
+        /// Assumes one container per repository
+        #[arg(short, long)]
+        container: String,
+        /// File where a x25519 age key pair
+        /// is stored. Leave empty to generate
+        /// a new key pair for global
+        /// management of ver-related secrets.
+        #[arg(long, short, default_value = None)]
+        key_file: Option<String>,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Initialize a ver repository
@@ -239,6 +327,13 @@ enum Commands {
     Secrets {
         #[command(subcommand)]
         secret_cmd: SecretsCommands,
+    },
+
+    /// Sync the local repository
+    /// to a remote object storage (S3, GCS, Azure)
+    Sync {
+        #[command(subcommand)]
+        sync_cmd: SyncCommands,
     },
 }
 
@@ -381,6 +476,88 @@ fn main() -> Result<(), VerError> {
                 let stdout = io::stdout();
                 let mut handle = stdout.lock();
                 set_secret(&secret_name, &secret_value, &mut handle)
+            }
+        },
+        Commands::Sync { sync_cmd } => match sync_cmd {
+            SyncCommands::S3 {
+                access_key_id,
+                secret_access_key,
+                region,
+                endpoint,
+                bucket,
+                key_file,
+            } => {
+                let key_id = if let Some(kid) = access_key_id {
+                    if kid.starts_with("secrets/") {
+                        let mut _v = Vec::new();
+                        let val =
+                            get_secret(&kid.replacen("secrets/", "", 1), key_file, false, &mut _v)?;
+                        Some(val)
+                    } else {
+                        Some(kid)
+                    }
+                } else {
+                    None
+                };
+                let secret_key = if let Some(sk) = secret_access_key {
+                    if sk.starts_with("secrets/") {
+                        let mut _v = Vec::new();
+                        let val =
+                            get_secret(&sk.replacen("secrets/", "", 1), key_file, false, &mut _v)?;
+                        Some(val)
+                    } else {
+                        Some(sk)
+                    }
+                } else {
+                    None
+                };
+                let reg = if let Some(r) = region {
+                    if r.starts_with("secrets/") {
+                        let mut _v = Vec::new();
+                        let val =
+                            get_secret(&r.replacen("secrets/", "", 1), key_file, false, &mut _v)?;
+                        Some(val)
+                    } else {
+                        Some(r)
+                    }
+                } else {
+                    None
+                };
+                let end = if let Some(e) = endpoint {
+                    if e.starts_with("secrets/") {
+                        let mut _v = Vec::new();
+                        let val =
+                            get_secret(&e.replacen("secrets/", "", 1), key_file, false, &mut _v)?;
+                        Some(val)
+                    } else {
+                        Some(e)
+                    }
+                } else {
+                    None
+                };
+                let buck = if bucket.starts_with("secrets/") {
+                    let mut _v = Vec::new();
+                    let val = get_secret(
+                        &bucket.replacen("secrets/", "", 1),
+                        key_file,
+                        false,
+                        &mut _v,
+                    )?;
+                    val
+                } else {
+                    bucket
+                };
+                let input = GetObjectStoreInput::S3 {
+                    access_key_id: key_id,
+                    secret_access_key: secret_key,
+                    region: reg,
+                    endpoint: end,
+                    bucket: buck,
+                };
+
+                sync_with_remote_storage(input)?;
+
+                Ok(())
             }
         },
     }

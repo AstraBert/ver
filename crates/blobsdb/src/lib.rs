@@ -1,8 +1,8 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::HashSet, hash::Hash, path::Path, sync::Arc};
 
 use async_compression::tokio::{bufread::ZstdDecoder, write::ZstdEncoder};
 use fastcdc::v2020::*;
-use object_store::{
+pub use object_store::{
     ObjectStore, ObjectStoreExt, PutPayload, aws::AmazonS3Builder, azure::MicrosoftAzureBuilder,
     gcp::GoogleCloudStorageBuilder, local::LocalFileSystem, path::Path as ObjPath,
 };
@@ -26,6 +26,12 @@ pub struct Chunk {
     pub offset: u64,
     pub length: usize,
     pub hash: [u8; 32],
+}
+
+impl Hash for Chunk {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.hash.hash(state);
+    }
 }
 
 pub enum GetObjectStoreInput {
@@ -208,6 +214,35 @@ async fn write_chunk<R: AsyncRead + Unpin>(
     Ok(())
 }
 
+pub async fn get_remote_head(
+    remote_storage: &Arc<dyn ObjectStore>,
+    head_path: &Path,
+) -> Result<Option<[u8; 32]>, String> {
+    let result = remote_storage
+        .get(
+            &ObjPath::from_filesystem_path(head_path)
+                .map_err(|e| format!("Could not convert head path to object storage path: {e}"))?,
+        )
+        .await;
+
+    let fetched = match result {
+        Ok(f) => f
+            .bytes()
+            .await
+            .map_err(|e| format!("Error while fetching head bytes: {e}"))?
+            .to_vec(),
+        Err(e) => match e {
+            object_store::Error::NotFound { path: _, source: _ } => return Ok(None),
+            _ => return Err(format!("Error while fetching head: {e}")),
+        },
+    };
+
+    let hash =
+        blake3::Hash::from_slice(&fetched).map_err(|e| format!("Invalid blake3 hash: {e}"))?;
+
+    Ok(Some(hash.as_bytes().to_owned()))
+}
+
 impl BlobsDB {
     pub fn new<O: ObjectStore, P: AsRef<Path>>(directory: P, storage: O) -> Result<Self, String> {
         Ok(Self {
@@ -312,5 +347,86 @@ impl BlobsDB {
         }
 
         Ok(v)
+    }
+
+    pub async fn sync(
+        &self,
+        remote_storage: Arc<dyn ObjectStore>,
+        chunks: HashSet<Chunk>,
+        current_head: [u8; 32],
+    ) -> Result<(), String> {
+        let head_path = self.directory.clone().join("head");
+        remote_storage
+            .put(&head_path, PutPayload::from(current_head.to_vec()))
+            .await
+            .map_err(|e| format!("Error while writing head to remote storage: {e}"))?;
+
+        let mut join_set_read = JoinSet::new();
+        let semaphore_read = Arc::new(Semaphore::new(MAX_CONCURRENT_READS));
+
+        for c in chunks.iter() {
+            let storage = remote_storage.clone();
+            let f = self
+                .directory
+                .clone()
+                .join(blake3::Hash::from_bytes(c.hash).to_string());
+            let permit = semaphore_read
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| format!("Error while acquiring the semaphore: {e}"))?;
+
+            let offset = c.offset;
+
+            join_set_read.spawn(async move {
+                let _permit = permit;
+                let result = read_chunk(storage, &f, offset).await;
+                match result {
+                    Ok((r, _)) => Ok((r, f)),
+                    Err(e) => Err(e),
+                }
+            });
+        }
+
+        let mut write_join_set = JoinSet::new();
+        let write_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_WRITES));
+
+        while let Some(res) = join_set_read.join_next().await {
+            match res {
+                Ok(Ok((content, path))) => {
+                    let write_permit =
+                        write_semaphore.clone().acquire_owned().await.map_err(|e| {
+                            format!(
+                                "An error occurred while acquiring the write semaphore: {}",
+                                e
+                            )
+                        })?;
+                    let storage = remote_storage.clone();
+
+                    write_join_set.spawn(async move {
+                        let _permit = write_permit;
+
+                        storage
+                            .put(&path, PutPayload::from(content))
+                            .await
+                            .map_err(|e| {
+                                format!("An error occurred while uploading the chunk: {}", e)
+                            })
+                    });
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(format!("Task panicked while reading the chunk: {}", e)),
+            }
+        }
+
+        while let Some(wr) = write_join_set.join_next().await {
+            match wr {
+                Ok(Ok(_)) => continue,
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(format!("Task panicked while uploading the chunk: {}", e)),
+            }
+        }
+
+        Ok(())
     }
 }
