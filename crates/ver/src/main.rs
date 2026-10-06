@@ -4,6 +4,7 @@ use blobsdb::GetObjectStoreInput;
 use clap::{Parser, Subcommand};
 
 use ver::{
+    commons::unwrap_maybe_secret,
     cp::copy as ver_copy,
     diff::diff_file,
     errors::VerError,
@@ -184,19 +185,13 @@ enum SyncCommands {
     /// load from local secrets (`.versecrets.json`)
     GCS {
         /// Path to the service account credentials file
-        #[arg(short, long, default_value = None)]
-        service_account_credentials_path: Option<String>,
+        #[arg(short, long)]
+        service_account_credentials_path: String,
         /// Name of the bucket where
         /// this repository should be stored.
         /// Assumes one bucket per repository
         #[arg(short, long)]
         bucket: String,
-        /// File where a x25519 age key pair
-        /// is stored. Leave empty to generate
-        /// a new key pair for global
-        /// management of ver-related secrets.
-        #[arg(long, short, default_value = None)]
-        key_file: Option<String>,
     },
     /// Sync with Azure Blob Storage.
     /// Leave all optional arguments
@@ -450,7 +445,7 @@ fn main() -> Result<(), VerError> {
             } => {
                 let stdout = io::stdout();
                 let mut handle = stdout.lock();
-                add_recipient(recipient_name, public_key, key_file, &mut handle)
+                add_recipient(recipient_name, public_key, key_file.as_deref(), &mut handle)
             }
             SecretsCommands::Get {
                 secret_name,
@@ -458,7 +453,7 @@ fn main() -> Result<(), VerError> {
             } => {
                 let stdout = io::stdout();
                 let mut handle = stdout.lock();
-                let _ = get_secret(&secret_name, key_file, true, &mut handle)?;
+                let _ = get_secret(&secret_name, key_file.as_deref(), true, &mut handle)?;
                 Ok(())
             }
             SecretsCommands::Init {
@@ -467,7 +462,7 @@ fn main() -> Result<(), VerError> {
             } => {
                 let stdout = io::stdout();
                 let mut handle = stdout.lock();
-                init_secrets(key_file, recipient_name, &mut handle)
+                init_secrets(key_file.as_deref(), recipient_name, &mut handle)
             }
             SecretsCommands::Set {
                 secret_name,
@@ -487,72 +482,53 @@ fn main() -> Result<(), VerError> {
                 bucket,
                 key_file,
             } => {
-                let key_id = if let Some(kid) = access_key_id {
-                    if kid.starts_with("secrets/") {
-                        let mut _v = Vec::new();
-                        let val =
-                            get_secret(&kid.replacen("secrets/", "", 1), key_file, false, &mut _v)?;
-                        Some(val)
-                    } else {
-                        Some(kid)
-                    }
-                } else {
-                    None
-                };
-                let secret_key = if let Some(sk) = secret_access_key {
-                    if sk.starts_with("secrets/") {
-                        let mut _v = Vec::new();
-                        let val =
-                            get_secret(&sk.replacen("secrets/", "", 1), key_file, false, &mut _v)?;
-                        Some(val)
-                    } else {
-                        Some(sk)
-                    }
-                } else {
-                    None
-                };
-                let reg = if let Some(r) = region {
-                    if r.starts_with("secrets/") {
-                        let mut _v = Vec::new();
-                        let val =
-                            get_secret(&r.replacen("secrets/", "", 1), key_file, false, &mut _v)?;
-                        Some(val)
-                    } else {
-                        Some(r)
-                    }
-                } else {
-                    None
-                };
-                let end = if let Some(e) = endpoint {
-                    if e.starts_with("secrets/") {
-                        let mut _v = Vec::new();
-                        let val =
-                            get_secret(&e.replacen("secrets/", "", 1), key_file, false, &mut _v)?;
-                        Some(val)
-                    } else {
-                        Some(e)
-                    }
-                } else {
-                    None
-                };
-                let buck = if bucket.starts_with("secrets/") {
-                    let mut _v = Vec::new();
-                    let val = get_secret(
-                        &bucket.replacen("secrets/", "", 1),
-                        key_file,
-                        false,
-                        &mut _v,
-                    )?;
-                    val
-                } else {
-                    bucket
-                };
+                let key_id = unwrap_maybe_secret(access_key_id.as_deref(), key_file.as_deref())?;
+                let secret_key =
+                    unwrap_maybe_secret(secret_access_key.as_deref(), key_file.as_deref())?;
+                let reg = unwrap_maybe_secret(region.as_deref(), key_file.as_deref())?;
+                let end = unwrap_maybe_secret(endpoint.as_deref(), key_file.as_deref())?;
+                let buck = unwrap_maybe_secret(Some(&bucket), key_file.as_deref())?;
                 let input = GetObjectStoreInput::S3 {
                     access_key_id: key_id,
                     secret_access_key: secret_key,
                     region: reg,
                     endpoint: end,
-                    bucket: buck,
+                    bucket: buck.unwrap(),
+                };
+
+                sync_with_remote_storage(input)?;
+
+                Ok(())
+            }
+            SyncCommands::Azure {
+                account_name,
+                account_key,
+                endpoint,
+                container,
+                key_file,
+            } => {
+                let account_n = unwrap_maybe_secret(account_name.as_deref(), key_file.as_deref())?;
+                let account_k = unwrap_maybe_secret(account_key.as_deref(), key_file.as_deref())?;
+                let end = unwrap_maybe_secret(endpoint.as_deref(), key_file.as_deref())?;
+                let cont = unwrap_maybe_secret(Some(&container), key_file.as_deref())?;
+                let input = GetObjectStoreInput::Azure {
+                    account_key: account_k,
+                    account_name: account_n,
+                    endpoint: end,
+                    container_name: cont.unwrap(),
+                };
+
+                sync_with_remote_storage(input)?;
+
+                Ok(())
+            }
+            SyncCommands::GCS {
+                service_account_credentials_path,
+                bucket,
+            } => {
+                let input = GetObjectStoreInput::Gcs {
+                    service_account_credentials_path,
+                    bucket,
                 };
 
                 sync_with_remote_storage(input)?;

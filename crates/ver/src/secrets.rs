@@ -43,13 +43,13 @@ fn create_global_ver_dir_if_not_exists() -> Result<(), VerError> {
 }
 
 pub fn init_secrets<O: Write>(
-    key_file: Option<String>,
+    key_file: Option<&str>,
     key_name: String,
     std_out: &mut O,
 ) -> Result<(), VerError> {
     create_global_ver_dir_if_not_exists()?;
     if let Some(key) = key_file {
-        let content = fs::read_to_string(&key)?;
+        let content = fs::read_to_string(key)?;
         let lines = content
             .lines()
             .filter(|l| !l.starts_with("# "))
@@ -101,9 +101,9 @@ fn get_recipients() -> Result<Vec<age::x25519::Recipient>, VerError> {
     Ok(lines)
 }
 
-fn get_private_key(key_file: Option<String>) -> Result<String, VerError> {
+fn get_private_key(key_file: Option<&str>) -> Result<String, VerError> {
     if let Some(key) = key_file {
-        let content = fs::read_to_string(&key)?;
+        let content = fs::read_to_string(key)?;
         let lines = content
             .lines()
             .filter(|l| !l.starts_with("# "))
@@ -156,7 +156,7 @@ fn encrypt(recipients: &[age::x25519::Recipient], plaintext: &[u8]) -> Result<St
 pub fn add_recipient<O: Write>(
     name: String,
     key: String,
-    key_file: Option<String>,
+    key_file: Option<&str>,
     std_out: &mut O,
 ) -> Result<(), VerError> {
     create_global_ver_dir_if_not_exists()?;
@@ -252,7 +252,7 @@ pub fn set_secret<O: Write>(
 
 pub fn get_secret<O: Write>(
     name: &str,
-    key_file: Option<String>,
+    key_file: Option<&str>,
     print: bool,
     std_out: &mut O,
 ) -> Result<String, VerError> {

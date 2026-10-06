@@ -43,8 +43,8 @@ pub enum GetObjectStoreInput {
         endpoint: Option<String>,
         bucket: String,
     },
-    Gcp {
-        service_account_credentials_path: Option<String>,
+    Gcs {
+        service_account_credentials_path: String,
         bucket: String,
     },
     Azure {
@@ -99,7 +99,7 @@ pub fn get_object_store(input: GetObjectStoreInput) -> Result<Arc<dyn ObjectStor
 
             Ok(Arc::new(store))
         }
-        GetObjectStoreInput::Gcp {
+        GetObjectStoreInput::Gcs {
             service_account_credentials_path,
             bucket,
         } => {
@@ -108,18 +108,8 @@ pub fn get_object_store(input: GetObjectStoreInput) -> Result<Arc<dyn ObjectStor
                 .with_http2_keep_alive_interval(std::time::Duration::from_secs(30))
                 .with_timeout(std::time::Duration::from_secs(60));
 
-            if service_account_credentials_path.is_none() {
-                let store = GoogleCloudStorageBuilder::from_env()
-                    .with_bucket_name(bucket)
-                    .with_client_options(client_options)
-                    .build()
-                    .map_err(|e| format!("Error while building GCP storage from env: {e}"))?;
-
-                return Ok(Arc::new(store));
-            }
-
             let store = GoogleCloudStorageBuilder::new()
-                .with_service_account_path(service_account_credentials_path.unwrap_or_default())
+                .with_service_account_path(service_account_credentials_path)
                 .with_bucket_name(bucket)
                 .with_client_options(client_options)
                 .build()
@@ -354,12 +344,19 @@ impl BlobsDB {
         remote_storage: Arc<dyn ObjectStore>,
         chunks: HashSet<Chunk>,
         current_head: [u8; 32],
+        redb_content: Vec<u8>,
     ) -> Result<(), String> {
-        let head_path = self.directory.clone().join("head");
+        let parent = self.directory.clone().parent().unwrap();
+        let head_path = parent.clone().join("head");
+        let redb_path = parent.join("files.redb");
         remote_storage
             .put(&head_path, PutPayload::from(current_head.to_vec()))
             .await
             .map_err(|e| format!("Error while writing head to remote storage: {e}"))?;
+        remote_storage
+            .put(&redb_path, PutPayload::from(redb_content))
+            .await
+            .map_err(|e| format!("Error while writing filedb to remote storage: {e}"))?;
 
         let mut join_set_read = JoinSet::new();
         let semaphore_read = Arc::new(Semaphore::new(MAX_CONCURRENT_READS));

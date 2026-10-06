@@ -1,3 +1,5 @@
 .ver/
 .env
 target/
+compose.yaml
+.versecrets.json

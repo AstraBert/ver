@@ -1,6 +1,6 @@
 use std::{
     collections::{HashSet, VecDeque},
-    env,
+    env, fs,
 };
 
 use blobsdb::{Chunk, GetObjectStoreInput, get_object_store, get_remote_head};
@@ -23,6 +23,7 @@ pub fn sync_with_remote_storage(input: GetObjectStoreInput) -> Result<(), VerErr
         );
     }
     let head_path = resolved.join("head");
+    let redb_content = fs::read(&resolved.join(REDB_PATH))?;
 
     let blobsdb = init_blobs_db(&resolved)?;
     let redb = Database::open(&resolved.join(REDB_PATH))?;
@@ -92,7 +93,7 @@ pub fn sync_with_remote_storage(input: GetObjectStoreInput) -> Result<(), VerErr
 
     rt().block_on(async {
         blobsdb
-            .sync(remote_storage, chunks, current_head.unwrap())
+            .sync(remote_storage, chunks, current_head.unwrap(), redb_content)
             .await
     })?;
 

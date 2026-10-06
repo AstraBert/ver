@@ -7,6 +7,7 @@ use std::{
 use crate::{
     errors::VerError,
     init::{HEAD_PATH, VER_DIRECTORY},
+    secrets::get_secret,
 };
 
 pub fn resolve_ver_dir_path(current_dir: PathBuf) -> Result<PathBuf, VerError> {
@@ -51,4 +52,21 @@ pub fn write_head(resolved: &Path, snapshot_id: &blake3::Hash) -> Result<(), Ver
     fs::write(resolved.join(HEAD_PATH), snapshot_id.to_string())?;
 
     Ok(())
+}
+
+pub fn unwrap_maybe_secret(
+    maybe_secret: Option<&str>,
+    key_file: Option<&str>,
+) -> Result<Option<String>, VerError> {
+    if let Some(ms) = maybe_secret {
+        if ms.starts_with("secrets/") {
+            let secret = ms.replacen("secrets/", "", 1);
+            let mut _out = Vec::new();
+            let value = get_secret(&secret, key_file, false, &mut _out)?;
+            return Ok(Some(value));
+        } else {
+            return Ok(Some(ms.to_owned()));
+        }
+    }
+    Ok(None)
 }
