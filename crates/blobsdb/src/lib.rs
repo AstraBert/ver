@@ -69,6 +69,7 @@ pub fn get_object_store(input: GetObjectStoreInput) -> Result<Arc<dyn ObjectStor
             bucket,
         } => {
             let client_options = object_store::ClientOptions::new()
+                .with_allow_http(true)
                 .with_pool_max_idle_per_host(32)
                 .with_http2_keep_alive_interval(std::time::Duration::from_secs(30))
                 .with_timeout(std::time::Duration::from_secs(60));
@@ -206,11 +207,10 @@ async fn write_chunk<R: AsyncRead + Unpin>(
 
 pub async fn get_remote_head(
     remote_storage: &Arc<dyn ObjectStore>,
-    head_path: &Path,
 ) -> Result<Option<[u8; 32]>, String> {
     let result = remote_storage
         .get(
-            &ObjPath::from_filesystem_path(head_path)
+            &ObjPath::from_url_path("head")
                 .map_err(|e| format!("Could not convert head path to object storage path: {e}"))?,
         )
         .await;
@@ -346,15 +346,18 @@ impl BlobsDB {
         current_head: [u8; 32],
         redb_content: Vec<u8>,
     ) -> Result<(), String> {
-        let parent = self.directory.clone().parent().unwrap();
-        let head_path = parent.clone().join("head");
-        let redb_path = parent.join("files.redb");
         remote_storage
-            .put(&head_path, PutPayload::from(current_head.to_vec()))
+            .put(
+                &ObjPath::from_url_path("head").map_err(|e| format!("Illegal path: {e}"))?,
+                PutPayload::from(current_head.to_vec()),
+            )
             .await
             .map_err(|e| format!("Error while writing head to remote storage: {e}"))?;
         remote_storage
-            .put(&redb_path, PutPayload::from(redb_content))
+            .put(
+                &ObjPath::from_url_path("files.redb").map_err(|e| format!("Illegal path: {e}"))?,
+                PutPayload::from(redb_content),
+            )
             .await
             .map_err(|e| format!("Error while writing filedb to remote storage: {e}"))?;
 
@@ -362,11 +365,11 @@ impl BlobsDB {
         let semaphore_read = Arc::new(Semaphore::new(MAX_CONCURRENT_READS));
 
         for c in chunks.iter() {
-            let storage = remote_storage.clone();
-            let f = self
-                .directory
-                .clone()
-                .join(blake3::Hash::from_bytes(c.hash).to_string());
+            let storage = self.storage.clone();
+            let hash_str = blake3::Hash::from_bytes(c.hash).to_string();
+            let f = self.directory.clone().join(hash_str.as_str());
+            let path = ObjPath::from_url_path(format!("blobs/{}", &hash_str))
+                .map_err(|e| format!("Illegal path: {e}"))?;
             let permit = semaphore_read
                 .clone()
                 .acquire_owned()
@@ -379,7 +382,7 @@ impl BlobsDB {
                 let _permit = permit;
                 let result = read_chunk(storage, &f, offset).await;
                 match result {
-                    Ok((r, _)) => Ok((r, f)),
+                    Ok((r, _)) => Ok((r, path)),
                     Err(e) => Err(e),
                 }
             });

@@ -1,6 +1,7 @@
 use std::{
     collections::{HashSet, VecDeque},
     env, fs,
+    io::Write,
 };
 
 use blobsdb::{Chunk, GetObjectStoreInput, get_object_store, get_remote_head};
@@ -13,7 +14,10 @@ use crate::{
     init::{REDB_PATH, init_blobs_db},
 };
 
-pub fn sync_with_remote_storage(input: GetObjectStoreInput) -> Result<(), VerError> {
+pub fn sync_with_remote_storage<O: Write>(
+    input: GetObjectStoreInput,
+    std_out: &mut O,
+) -> Result<(), VerError> {
     let resolved = resolve_ver_dir_path(env::current_dir()?)?;
     let current_head = get_head(&resolved)?;
     if current_head.is_none() {
@@ -22,14 +26,12 @@ pub fn sync_with_remote_storage(input: GetObjectStoreInput) -> Result<(), VerErr
                 .into(),
         );
     }
-    let head_path = resolved.join("head");
     let redb_content = fs::read(&resolved.join(REDB_PATH))?;
 
     let blobsdb = init_blobs_db(&resolved)?;
     let redb = Database::open(&resolved.join(REDB_PATH))?;
     let remote_storage = get_object_store(input)?;
-    let remote_head =
-        rt().block_on(async { get_remote_head(&remote_storage, &head_path).await })?;
+    let remote_head = rt().block_on(async { get_remote_head(&remote_storage).await })?;
 
     let rtx = redb.begin_read()?;
     let table = rtx.open_table(SNAPSHOT_TABLE)?;
@@ -39,6 +41,11 @@ pub fn sync_with_remote_storage(input: GetObjectStoreInput) -> Result<(), VerErr
     let mut found = false;
 
     if let Some(rh) = remote_head {
+        writeln!(
+            std_out,
+            "Remote storage is at: {}",
+            blake3::Hash::from_bytes(rh)
+        )?;
         loop {
             let current = queue.pop_front();
             if let Some(cur) = current {
@@ -48,6 +55,11 @@ pub fn sync_with_remote_storage(input: GetObjectStoreInput) -> Result<(), VerErr
                 }
                 let opt = table.get(cur)?;
                 if let Some(bts) = opt {
+                    writeln!(
+                        std_out,
+                        "Snapshot {} not in remote, adding it to the sync batch",
+                        blake3::Hash::from_bytes(cur)
+                    )?;
                     let snap: Snapshot = postcard::from_bytes(bts.value())?;
                     for (_, cs) in snap.repository_state {
                         chunks.extend(cs.iter());
@@ -66,18 +78,24 @@ pub fn sync_with_remote_storage(input: GetObjectStoreInput) -> Result<(), VerErr
             }
         }
     } else {
+        writeln!(std_out, "Remote storage does not have a head")?;
         loop {
             let current = queue.pop_front();
             if let Some(cur) = current {
                 let opt = table.get(cur)?;
                 if let Some(bts) = opt {
+                    writeln!(
+                        std_out,
+                        "Adding snapshot {} to the sync batch",
+                        blake3::Hash::from_bytes(cur)
+                    )?;
                     let snap: Snapshot = postcard::from_bytes(bts.value())?;
+                    for (_, cs) in snap.repository_state {
+                        chunks.extend(cs.iter());
+                    }
                     if snap.parent_ids.is_empty() {
                         found = true;
                         break;
-                    }
-                    for (_, cs) in snap.repository_state {
-                        chunks.extend(cs.iter());
                     }
                     queue.extend(snap.parent_ids.iter());
                 }
@@ -91,11 +109,19 @@ pub fn sync_with_remote_storage(input: GetObjectStoreInput) -> Result<(), VerErr
         return Err("Could not find remote head in the snapshots history".into());
     }
 
+    writeln!(
+        std_out,
+        "Syncing {} chunks, files.redb and head to remote storage",
+        chunks.len()
+    )?;
+
     rt().block_on(async {
         blobsdb
             .sync(remote_storage, chunks, current_head.unwrap(), redb_content)
             .await
     })?;
+
+    writeln!(std_out, "Sync completed")?;
 
     Ok(())
 }

@@ -496,7 +496,10 @@ fn main() -> Result<(), VerError> {
                     bucket: buck.unwrap(),
                 };
 
-                sync_with_remote_storage(input)?;
+                let out = io::stdout();
+                let mut handle = out.lock();
+
+                sync_with_remote_storage(input, &mut handle)?;
 
                 Ok(())
             }
@@ -518,7 +521,10 @@ fn main() -> Result<(), VerError> {
                     container_name: cont.unwrap(),
                 };
 
-                sync_with_remote_storage(input)?;
+                let out = io::stdout();
+                let mut handle = out.lock();
+
+                sync_with_remote_storage(input, &mut handle)?;
 
                 Ok(())
             }
@@ -531,7 +537,10 @@ fn main() -> Result<(), VerError> {
                     bucket,
                 };
 
-                sync_with_remote_storage(input)?;
+                let out = io::stdout();
+                let mut handle = out.lock();
+
+                sync_with_remote_storage(input, &mut handle)?;
 
                 Ok(())
             }
