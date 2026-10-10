@@ -4,6 +4,7 @@ use blobsdb::GetObjectStoreInput;
 use clap::{Parser, Subcommand};
 
 use ver::{
+    clone::clone_from_remote,
     commons::unwrap_maybe_secret,
     cp::copy as ver_copy,
     diff::diff_file,
@@ -153,6 +154,8 @@ enum SyncCommands {
     /// Prefix a value with `secrets/` to
     /// load from local secrets (`.versecrets.json`)
     S3 {
+        /// Name of the remote storage you are syncing with
+        remote_name: String,
         /// Access key ID for the secret access key
         #[arg(short, long, default_value = None)]
         access_key_id: Option<String>,
@@ -184,6 +187,8 @@ enum SyncCommands {
     /// Prefix a value with `secrets/` to
     /// load from local secrets (`.versecrets.json`)
     GCS {
+        /// Name of the remote storage you are syncing with
+        remote_name: String,
         /// Path to the service account credentials file
         #[arg(short, long)]
         service_account_credentials_path: String,
@@ -200,6 +205,8 @@ enum SyncCommands {
     /// Prefix a value with `secrets/` to
     /// load from local secrets (`.versecrets.json`)
     Azure {
+        /// Name of the remote storage you are syncing with
+        remote_name: String,
         /// Account connected to Azure Blob Storage
         #[arg(long, default_value = None)]
         account_name: Option<String>,
@@ -211,6 +218,101 @@ enum SyncCommands {
         endpoint: Option<String>,
         /// Name of the container where
         /// this repository should be stored.
+        /// Assumes one container per repository
+        #[arg(short, long)]
+        container: String,
+        /// File where a x25519 age key pair
+        /// is stored. Leave empty to generate
+        /// a new key pair for global
+        /// management of ver-related secrets.
+        #[arg(long, short, default_value = None)]
+        key_file: Option<String>,
+    },
+}
+
+/// Sync-related subcommands
+#[derive(Debug, Subcommand)]
+enum CloneCommands {
+    /// Clone from S3.
+    /// Leave all optional arguments
+    /// blank to infer the configuration
+    /// from the environment.
+    /// Prefix a value with `secrets/` to
+    /// load from local secrets (`.versecrets.json`)
+    S3 {
+        /// Name of the remote storage you are cloning from
+        remote_name: String,
+        /// Destination folder you are cloning to.
+        /// It gets created if it doesn't exist.
+        dest: String,
+        /// Access key ID for the secret access key
+        #[arg(short, long, default_value = None)]
+        access_key_id: Option<String>,
+        /// Secret access key
+        #[arg(short, long, default_value = None)]
+        secret_access_key: Option<String>,
+        /// Region for the S3 deployments
+        #[arg(short, long, default_value = None)]
+        region: Option<String>,
+        /// S3 Endpoint
+        #[arg(short, long, default_value = None)]
+        endpoint: Option<String>,
+        /// Name of the bucket where
+        /// this repository is stored.
+        /// Assumes one bucket per repository.
+        #[arg(short, long)]
+        bucket: String,
+        /// File where a x25519 age key pair
+        /// is stored. Leave empty to generate
+        /// a new key pair for global
+        /// management of ver-related secrets.
+        #[arg(long, short, default_value = None)]
+        key_file: Option<String>,
+    },
+    /// Clone from Google Cloud Storage.
+    /// Leave all optional arguments
+    /// blank to infer the configuration
+    /// from the environment.
+    /// Prefix a value with `secrets/` to
+    /// load from local secrets (`.versecrets.json`)
+    GCS {
+        /// Name of the remote storage you are cloning from
+        remote_name: String,
+        /// Destination folder you are cloning to.
+        /// It gets created if it doesn't exist.
+        dest: String,
+        /// Path to the service account credentials file
+        #[arg(short, long)]
+        service_account_credentials_path: String,
+        /// Name of the bucket where
+        /// this repository is stored.
+        /// Assumes one bucket per repository
+        #[arg(short, long)]
+        bucket: String,
+    },
+    /// Clone from Azure Blob Storage.
+    /// Leave all optional arguments
+    /// blank to infer the configuration
+    /// from the environment.
+    /// Prefix a value with `secrets/` to
+    /// load from local secrets (`.versecrets.json`)
+    Azure {
+        /// Name of the remote storage you are cloning from
+        remote_name: String,
+        /// Destination folder you are cloning to.
+        /// It gets created if it doesn't exist.
+        dest: String,
+        /// Account connected to Azure Blob Storage
+        #[arg(long, default_value = None)]
+        account_name: Option<String>,
+        /// Secret key associated with the account
+        #[arg(long, default_value = None)]
+        account_key: Option<String>,
+        /// Azure Blob Storage endpoint
+        #[arg(short, long, default_value = None)]
+        endpoint: Option<String>,
+        /// Name of the container where
+        /// this repository is stored.
         /// Assumes one container per repository
         #[arg(short, long)]
         container: String,
@@ -329,6 +431,13 @@ enum Commands {
     Sync {
         #[command(subcommand)]
         sync_cmd: SyncCommands,
+    },
+
+    /// Clone a repository
+    /// from a remote object storage (S3, GCS, Azure)
+    Clone {
+        #[command(subcommand)]
+        clone_cmd: CloneCommands,
     },
 }
 
@@ -475,6 +584,91 @@ fn main() -> Result<(), VerError> {
         },
         Commands::Sync { sync_cmd } => match sync_cmd {
             SyncCommands::S3 {
+                remote_name,
+                access_key_id,
+                secret_access_key,
+                region,
+                endpoint,
+                bucket,
+                key_file,
+            } => {
+                let key_id = unwrap_maybe_secret(access_key_id.as_deref(), key_file.as_deref())?;
+                let secret_key =
+                    unwrap_maybe_secret(secret_access_key.as_deref(), key_file.as_deref())?;
+                let reg = unwrap_maybe_secret(region.as_deref(), key_file.as_deref())?;
+                let end = unwrap_maybe_secret(endpoint.as_deref(), key_file.as_deref())?;
+                let buck = unwrap_maybe_secret(Some(&bucket), key_file.as_deref())?;
+                let input = GetObjectStoreInput::S3 {
+                    access_key_id: key_id,
+                    secret_access_key: secret_key,
+                    region: reg,
+                    endpoint: end,
+                    bucket: buck.unwrap(),
+                };
+
+                let out = io::stdout();
+                let mut handle = out.lock();
+                let stderr = io::stderr();
+                let mut errhandle = stderr.lock();
+
+                sync_with_remote_storage(remote_name, input, &mut handle, &mut errhandle)?;
+
+                Ok(())
+            }
+            SyncCommands::Azure {
+                remote_name,
+                account_name,
+                account_key,
+                endpoint,
+                container,
+                key_file,
+            } => {
+                let account_n = unwrap_maybe_secret(account_name.as_deref(), key_file.as_deref())?;
+                let account_k = unwrap_maybe_secret(account_key.as_deref(), key_file.as_deref())?;
+                let end = unwrap_maybe_secret(endpoint.as_deref(), key_file.as_deref())?;
+                let cont = unwrap_maybe_secret(Some(&container), key_file.as_deref())?;
+                let input = GetObjectStoreInput::Azure {
+                    account_key: account_k,
+                    account_name: account_n,
+                    endpoint: end,
+                    container_name: cont.unwrap(),
+                };
+
+                let out = io::stdout();
+                let mut handle = out.lock();
+
+                let stderr = io::stderr();
+                let mut errhandle = stderr.lock();
+
+                sync_with_remote_storage(remote_name, input, &mut handle, &mut errhandle)?;
+
+                Ok(())
+            }
+            SyncCommands::GCS {
+                remote_name,
+                service_account_credentials_path,
+                bucket,
+            } => {
+                let input = GetObjectStoreInput::Gcs {
+                    service_account_credentials_path,
+                    bucket,
+                };
+
+                let out = io::stdout();
+                let mut handle = out.lock();
+
+                let stderr = io::stderr();
+                let mut errhandle = stderr.lock();
+
+                sync_with_remote_storage(remote_name, input, &mut handle, &mut errhandle)?;
+
+                Ok(())
+            }
+        },
+        Commands::Clone { clone_cmd } => match clone_cmd {
+            CloneCommands::S3 {
+                remote_name,
+                dest,
                 access_key_id,
                 secret_access_key,
                 region,
@@ -499,11 +693,13 @@ fn main() -> Result<(), VerError> {
                 let out = io::stdout();
                 let mut handle = out.lock();
 
-                sync_with_remote_storage(input, &mut handle)?;
+                clone_from_remote(remote_name, dest, input, &mut handle)?;
 
                 Ok(())
             }
-            SyncCommands::Azure {
+            CloneCommands::Azure {
+                remote_name,
+                dest,
                 account_name,
                 account_key,
                 endpoint,
@@ -524,11 +720,13 @@ fn main() -> Result<(), VerError> {
                 let out = io::stdout();
                 let mut handle = out.lock();
 
-                sync_with_remote_storage(input, &mut handle)?;
+                clone_from_remote(remote_name, dest, input, &mut handle)?;
 
                 Ok(())
             }
-            SyncCommands::GCS {
+            CloneCommands::GCS {
+                remote_name,
+                dest,
                 service_account_credentials_path,
                 bucket,
             } => {
@@ -540,7 +738,7 @@ fn main() -> Result<(), VerError> {
                 let out = io::stdout();
                 let mut handle = out.lock();
 
-                sync_with_remote_storage(input, &mut handle)?;
+                clone_from_remote(remote_name, dest, input, &mut handle)?;
 
                 Ok(())
             }

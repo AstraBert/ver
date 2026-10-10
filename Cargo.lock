@@ -320,6 +320,7 @@ dependencies = [
  "blake3",
  "fastcdc",
  "object_store",
+ "postcard",
  "serde",
  "serde_json",
  "tempdir",

@@ -13,16 +13,18 @@ pub const SNAPSHOT_HISTORY_FILE: &str = "snapshot_history";
 pub const REDB_PATH: &str = "files.redb";
 pub const BLOBDB_PATH: &str = "blobs";
 pub const HEAD_PATH: &str = "head";
+pub const SYNC_MAP_PATH: &str = "sync_map";
 
 pub fn init_blobs_db(base_path: &Path) -> Result<BlobsDB, VerError> {
     let store = get_object_store(blobsdb::GetObjectStoreInput::Local)?;
     let p = base_path.join(BLOBDB_PATH);
+    let sp = base_path.join(SYNC_MAP_PATH);
 
     if !p.exists() {
         fs::create_dir_all(&p)?;
     }
 
-    let db = BlobsDB::new(&p, store)?;
+    let db = BlobsDB::new(&p, &sp, store)?;
 
     Ok(db)
 }

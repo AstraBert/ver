@@ -6,7 +6,7 @@ use tempdir::TempDir;
 fn setup_blobsdb() -> (TempDir, BlobsDB) {
     let tmp = TempDir::new("blobsdb_test").unwrap();
     let store = get_object_store(GetObjectStoreInput::Local).unwrap();
-    let db = BlobsDB::new(tmp.path(), store).unwrap();
+    let db = BlobsDB::new(tmp.path(), &tmp.path().join("sync_map"), store).unwrap();
     (tmp, db)
 }
 
@@ -56,7 +56,10 @@ async fn test_put_and_get_large_file() {
 
     // Put the file
     let chunks = db.put(&file_path).await.unwrap();
-    assert!(chunks.len() > 1, "Large file should be split into multiple chunks");
+    assert!(
+        chunks.len() > 1,
+        "Large file should be split into multiple chunks"
+    );
 
     // Verify chunk properties
     let mut expected_offset = 0;
@@ -198,7 +201,7 @@ async fn test_get_object_store_local() {
 async fn test_blobsdb_new() {
     let tmp = TempDir::new("blobsdb_test").unwrap();
     let store = get_object_store(GetObjectStoreInput::Local).unwrap();
-    let db = BlobsDB::new(tmp.path(), store);
+    let db = BlobsDB::new(tmp.path(), &tmp.path().join("sync_map"), store);
     assert!(db.is_ok());
 }
 
@@ -218,7 +221,11 @@ async fn test_chunk_boundaries() {
         assert_eq!(chunk.offset, expected_offset, "Chunks should be contiguous");
         expected_offset += chunk.length as u64;
     }
-    assert_eq!(expected_offset, content.len() as u64, "Chunks should cover entire file");
+    assert_eq!(
+        expected_offset,
+        content.len() as u64,
+        "Chunks should cover entire file"
+    );
 
     // Verify round-trip
     let retrieved = db.get(Arc::new(chunks)).await.unwrap();
@@ -265,9 +272,7 @@ async fn test_concurrent_puts() {
     let mut handles = vec![];
     for file_path in files {
         let db = Arc::clone(&db);
-        let handle = tokio::spawn(async move {
-            db.put(&file_path).await
-        });
+        let handle = tokio::spawn(async move { db.put(&file_path).await });
         handles.push(handle);
     }
 
@@ -293,9 +298,7 @@ async fn test_concurrent_gets() {
     for _ in 0..10 {
         let db = Arc::clone(&db);
         let chunks = Arc::clone(&chunks);
-        let handle = tokio::spawn(async move {
-            db.get(chunks).await
-        });
+        let handle = tokio::spawn(async move { db.get(chunks).await });
         handles.push(handle);
     }
 
@@ -373,7 +376,10 @@ async fn test_file_larger_than_max_chunk_size() {
     let file_path = create_test_file(&tmp, "over_max.bin", &content);
 
     let chunks = db.put(&file_path).await.unwrap();
-    assert!(chunks.len() > 1, "File larger than MAX_CHUNK_SIZE should be split");
+    assert!(
+        chunks.len() > 1,
+        "File larger than MAX_CHUNK_SIZE should be split"
+    );
 
     let retrieved = db.get(Arc::new(chunks)).await.unwrap();
     assert_eq!(retrieved, content);

@@ -11,12 +11,14 @@ use crate::{
     commons::{get_head, resolve_ver_dir_path},
     errors::VerError,
     files::{SNAPSHOT_TABLE, Snapshot, rt},
-    init::{REDB_PATH, init_blobs_db},
+    init::{REDB_PATH, SNAPSHOT_HISTORY_FILE, init_blobs_db},
 };
 
-pub fn sync_with_remote_storage<O: Write>(
+pub fn sync_with_remote_storage<O: Write, E: Write>(
+    remote_name: String,
     input: GetObjectStoreInput,
     std_out: &mut O,
+    std_err: &mut E,
 ) -> Result<(), VerError> {
     let resolved = resolve_ver_dir_path(env::current_dir()?)?;
     let current_head = get_head(&resolved)?;
@@ -27,6 +29,7 @@ pub fn sync_with_remote_storage<O: Write>(
         );
     }
     let redb_content = fs::read(&resolved.join(REDB_PATH))?;
+    let history_content = fs::read(&resolved.join(SNAPSHOT_HISTORY_FILE))?;
 
     let blobsdb = init_blobs_db(&resolved)?;
     let redb = Database::open(&resolved.join(REDB_PATH))?;
@@ -117,7 +120,15 @@ pub fn sync_with_remote_storage<O: Write>(
 
     rt().block_on(async {
         blobsdb
-            .sync(remote_storage, chunks, current_head.unwrap(), redb_content)
+            .sync(
+                remote_name,
+                remote_storage,
+                chunks,
+                current_head.unwrap(),
+                redb_content,
+                history_content,
+                std_err,
+            )
             .await
     })?;
 

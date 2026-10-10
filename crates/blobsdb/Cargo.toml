@@ -10,6 +10,7 @@ object_store = { version = "0.14", features = ["aws", "gcp", "azure"] }
 tokio = { workspace = true }
 tokio-stream = "0.1.19"
 tokio-util = { version = "0.7", features = ["io"] }
+postcard = { workspace = true }
 serde = { workspace = true }
 async-compression = { version = "0.4.50", features = ["tokio", "zstd"] }
 

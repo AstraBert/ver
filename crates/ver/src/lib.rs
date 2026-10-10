@@ -1,3 +1,4 @@
+pub mod clone;
 pub mod commons;
 pub mod cp;
 pub mod diff;
