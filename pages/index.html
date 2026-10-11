@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ver: A new spring for version control</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --fg: #c9d1d9;
+            --accent: #58a6ff;
+            --accent2: #3fb950;
+            --muted: #8b949e;
+            --border: #30363d;
+            --code-bg: #161b22;
+            --card-bg: #161b22;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Noto Sans, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            line-height: 1.6;
+        }
+
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* ---- header ---- */
+        .hero {
+            text-align: center;
+            padding: 6rem 2rem 4rem;
+            background: linear-gradient(180deg, #0d1117 0%, #161b22 100%);
+        }
+
+        .hero h1 {
+            font-size: 4rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero .tagline {
+            font-size: 1.4rem;
+            color: var(--muted);
+            margin-top: 0.5rem;
+        }
+
+        .hero .etymology {
+            font-size: 0.95rem;
+            color: var(--muted);
+            margin-top: 0.3rem;
+            font-style: normal;
+            opacity: 0.7;
+        }
+
+        .hero .badge {
+            display: inline-block;
+            margin-top: 1.2rem;
+            padding: 0.3rem 1rem;
+            border: 1px solid var(--accent2);
+            border-radius: 2rem;
+            color: var(--accent2);
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .hero .install {
+            margin-top: 2rem;
+            display: inline-block;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 0.8rem 1.5rem;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 1.05rem;
+            color: var(--accent2);
+        }
+
+        .hero .install .prompt { color: var(--muted); user-select: none; }
+
+        /* ---- layout ---- */
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        section { padding: 3rem 0; }
+        section + section { border-top: 1px solid var(--border); }
+
+        h2 {
+            font-size: 1.8rem;
+            margin-bottom: 1rem;
+            color: var(--fg);
+        }
+
+        h3 {
+            font-size: 1.2rem;
+            margin: 1.5rem 0 0.5rem;
+            color: var(--accent);
+        }
+
+        p { margin-bottom: 1rem; }
+
+        /* ---- code blocks ---- */
+        pre {
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 1rem 1.2rem;
+            overflow-x: auto;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            margin-bottom: 1rem;
+        }
+
+        pre .comment { color: var(--muted); }
+        pre .cmd { color: var(--accent2); }
+
+        code {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.9em;
+            background: var(--code-bg);
+            padding: 0.15em 0.4em;
+            border-radius: 0.3rem;
+        }
+
+        /* ---- cards ---- */
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 1.2rem;
+        }
+
+        .card h4 { margin-bottom: 0.3rem; color: var(--fg); }
+        .card p { color: var(--muted); font-size: 0.9rem; margin: 0; }
+
+        /* ---- table ---- */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 0.6rem 0.8rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th { color: var(--muted); font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        td code { font-size: 0.85rem; }
+
+        /* ---- roadmap ---- */
+        .roadmap {
+            list-style: none;
+            padding: 0;
+        }
+
+        .roadmap li {
+            padding: 0.6rem 0;
+            border-bottom: 1px solid var(--border);
+            color: var(--fg);
+        }
+
+        .roadmap li:last-child {
+            border-bottom: none;
+        }
+
+        .roadmap li::before {
+            content: "\2610\0020"; /* ballot box */
+            margin-right: 0.5rem;
+            color: var(--muted);
+        }
+
+        /* ---- footer ---- */
+        footer {
+            text-align: center;
+            padding: 3rem 2rem;
+            color: var(--muted);
+            border-top: 1px solid var(--border);
+            font-size: 0.9rem;
+        }
+
+        /* ---- responsive ---- */
+        @media (max-width: 600px) {
+            .hero h1 { font-size: 2.5rem; }
+            .hero .tagline { font-size: 1.1rem; }
+            .cards { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="hero">
+    <h1>ver</h1>
+    <p class="tagline">A new spring for version control.</p>
+    <p class="etymology">from the Latin <em>ver</em>, &ldquo;spring&rdquo;</p>
+    <span class="badge">Alpha release</span>
+    <br>
+    <div class="install">
+        <span class="prompt">$ </span>cargo install ver-vcs
+    </div>
+</div>
+
+<div class="container">
+
+    <!-- Features -->
+    <section>
+        <h2>Why ver?</h2>
+        <div class="cards">
+            <div class="card">
+                <h4>Content-defined chunking</h4>
+                <p>Files are split using FastCDC, so only changed chunks are stored. Deduplication is built in.</p>
+            </div>
+            <div class="card">
+                <h4>BLAKE3 hashing</h4>
+                <p>Every chunk is content-addressed with BLAKE3 for integrity and fast lookups.</p>
+            </div>
+            <div class="card">
+                <h4>Cloud sync</h4>
+                <p>Push and pull snapshots to S3, GCS, or Azure Blob Storage with incremental uploads.</p>
+            </div>
+            <div class="card">
+                <h4>Simple CLI</h4>
+                <p>Snap to save, goto to restore. No staging area or branch management.</p>
+            </div>
+            <div class="card">
+                <h4>Merges</h4>
+                <p>Merge between repositories with interactive conflict resolution.</p>
+            </div>
+            <div class="card">
+                <h4>Encrypted secrets</h4>
+                <p>Store cloud credentials encrypted with age (x25519) right in your repo.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick start -->
+    <section>
+        <h2>Quick start</h2>
+<pre><span class="comment"># Initialize a repository</span>
+<span class="cmd">ver init</span>
+
+<span class="comment"># Create some files and take a snapshot</span>
+echo "hello" &gt; hello.txt
+<span class="cmd">ver snap my-first-snapshot</span>
+
+<span class="comment"># Make changes and snapshot again</span>
+echo "world" &gt;&gt; hello.txt
+<span class="cmd">ver snap my-second-snapshot</span>
+
+<span class="comment"># View history</span>
+<span class="cmd">ver log</span>
+
+<span class="comment"># Go back to the first snapshot</span>
+<span class="cmd">ver goto my-first-snapshot</span>
+
+<span class="comment"># Diff a file between snapshots</span>
+<span class="cmd">ver diff hello.txt -a my-second-snapshot</span></pre>
+    </section>
+
+    <!-- Command reference -->
+    <section>
+        <h2>Command reference</h2>
+
+        <h3>Repository</h3>
+        <table>
+            <tr><th>Command</th><th>Description</th></tr>
+            <tr><td><code>ver init [dir]</code></td><td>Initialize a new repository</td></tr>
+            <tr><td><code>ver snap &lt;name&gt; [-d desc]</code></td><td>Snapshot the current state</td></tr>
+            <tr><td><code>ver goto &lt;id&gt; [paths...]</code></td><td>Restore to a snapshot</td></tr>
+            <tr><td><code>ver log [--head N]</code></td><td>Show snapshot history</td></tr>
+            <tr><td><code>ver cp &lt;id&gt; &lt;dest&gt;</code></td><td>Copy repo at a snapshot</td></tr>
+        </table>
+
+        <h3>Inspection</h3>
+        <table>
+            <tr><th>Command</th><th>Description</th></tr>
+            <tr><td><code>ver show &lt;path&gt; [-s id]</code></td><td>Print file content at a snapshot</td></tr>
+            <tr><td><code>ver diff &lt;path&gt; -a &lt;id&gt;</code></td><td>Diff a file between snapshots</td></tr>
+        </table>
+
+        <h3>Merging</h3>
+        <table>
+            <tr><th>Command</th><th>Description</th></tr>
+            <tr><td><code>ver merge run &lt;name&gt; --from &lt;repo&gt;</code></td><td>Start a merge</td></tr>
+            <tr><td><code>ver merge pick &lt;name&gt; [-o ...] [-t ...]</code></td><td>Resolve conflicts</td></tr>
+            <tr><td><code>ver merge end &lt;name&gt;</code></td><td>Finalize the merge</td></tr>
+        </table>
+
+        <h3>Remote storage</h3>
+        <table>
+            <tr><th>Command</th><th>Description</th></tr>
+            <tr><td><code>ver sync s3 &lt;name&gt; --bucket ...</code></td><td>Sync to Amazon S3</td></tr>
+            <tr><td><code>ver sync gcs &lt;name&gt; --bucket ...</code></td><td>Sync to Google Cloud Storage</td></tr>
+            <tr><td><code>ver sync azure &lt;name&gt; --container ...</code></td><td>Sync to Azure Blob Storage</td></tr>
+            <tr><td><code>ver clone s3 &lt;name&gt; &lt;dest&gt; --bucket ...</code></td><td>Clone from S3</td></tr>
+            <tr><td><code>ver clone gcs &lt;name&gt; &lt;dest&gt; --bucket ...</code></td><td>Clone from GCS</td></tr>
+            <tr><td><code>ver clone azure &lt;name&gt; &lt;dest&gt; --container ...</code></td><td>Clone from Azure</td></tr>
+        </table>
+
+        <h3>Secrets</h3>
+        <table>
+            <tr><th>Command</th><th>Description</th></tr>
+            <tr><td><code>ver secrets init &lt;name&gt;</code></td><td>Initialize secrets management</td></tr>
+            <tr><td><code>ver secrets set &lt;name&gt; &lt;value&gt;</code></td><td>Store an encrypted secret</td></tr>
+            <tr><td><code>ver secrets get &lt;name&gt;</code></td><td>Retrieve a secret</td></tr>
+            <tr><td><code>ver secrets add-recipient &lt;name&gt; &lt;key&gt;</code></td><td>Add a recipient</td></tr>
+        </table>
+    </section>
+
+    <!-- How it works -->
+    <section>
+        <h2>How it works</h2>
+        <p>
+            When you run <code>ver snap</code>, each file is split into content-defined chunks using
+            <a href="https://github.com/nlfiedler/fastcdc-rs">FastCDC</a>. Each chunk is hashed with
+            <a href="https://github.com/BLAKE3-team/BLAKE3">BLAKE3</a>, compressed with zstd, and stored
+            in <code>.ver/blobs/</code>. Snapshots, which map file paths to their chunk lists,
+            are stored in an embedded <a href="https://github.com/cberner/redb">redb</a> database.
+        </p>
+        <p>
+            Syncing walks the snapshot graph to find chunks the remote is missing, uploads them in parallel,
+            then writes the head pointer. Cloning downloads all chunks and reconstructs your files from the
+            snapshot graph. Because chunks are content-addressed, identical data is never stored or
+            transferred twice.
+        </p>
+    </section>
+
+    <!-- Roadmap -->
+    <section>
+        <h2>Roadmap</h2>
+        <p>Coarse plans for future development, expected through the end of 2026 and into 2027.</p>
+        <ul class="roadmap">
+            <li>Unified I/O interface that encompasses FS and object storage, allowing operations like <code>cp</code> and <code>merge</code> across storage backends</li>
+            <li>Single-node server to manage syncs and clones</li>
+            <li>UI attached to the server to display, navigate, and share ver repositories</li>
+            <li>Multi-node server</li>
+        </ul>
+    </section>
+
+    <!-- Build from source -->
+    <section>
+        <h2>Build from source</h2>
+<pre><span class="comment"># Clone the repository</span>
+git clone https://github.com/AstraBert/ver.git
+cd ver
+
+<span class="comment"># Install</span>
+cargo install --path crates/ver</pre>
+    </section>
+
+</div>
+
+<footer>
+    <p>
+        <a href="https://github.com/AstraBert/ver">GitHub</a> &middot;
+        MIT License
+    </p>
+</footer>
+
+</body>
+</html>

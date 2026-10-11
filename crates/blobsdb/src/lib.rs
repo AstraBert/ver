@@ -4,13 +4,13 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicUsize},
     time::Duration,
 };
 
 use async_compression::tokio::{bufread::ZstdDecoder, write::ZstdEncoder};
 use fastcdc::v2020::*;
-use object_store::{BackoffConfig, RetryConfig};
+use object_store::{BackoffConfig, RetryConfig, memory::InMemory};
 pub use object_store::{
     ObjectStore, ObjectStoreExt, PutPayload, aws::AmazonS3Builder, azure::MicrosoftAzureBuilder,
     gcp::GoogleCloudStorageBuilder, local::LocalFileSystem, path::Path as ObjPath,
@@ -44,6 +44,8 @@ impl Hash for Chunk {
 }
 
 pub enum GetObjectStoreInput {
+    /// only for testing
+    InMemory,
     Local,
     S3 {
         access_key_id: Option<String>,
@@ -76,6 +78,10 @@ pub fn get_object_store(input: GetObjectStoreInput) -> Result<Arc<dyn ObjectStor
     };
 
     match input {
+        GetObjectStoreInput::InMemory => {
+            let store = InMemory::new();
+            Ok(Arc::new(store))
+        }
         GetObjectStoreInput::Local => {
             let store = LocalFileSystem::new();
             Ok(Arc::new(store))
@@ -126,6 +132,7 @@ pub fn get_object_store(input: GetObjectStoreInput) -> Result<Arc<dyn ObjectStor
             bucket,
         } => {
             let client_options = object_store::ClientOptions::new()
+                .with_allow_http(true)
                 .with_pool_max_idle_per_host(32)
                 .with_http2_keep_alive_interval(std::time::Duration::from_secs(30))
                 .with_timeout(std::time::Duration::from_secs(60));
@@ -147,6 +154,7 @@ pub fn get_object_store(input: GetObjectStoreInput) -> Result<Arc<dyn ObjectStor
             container_name,
         } => {
             let client_options = object_store::ClientOptions::new()
+                .with_allow_http(true)
                 .with_pool_max_idle_per_host(32)
                 .with_http2_keep_alive_interval(std::time::Duration::from_secs(30))
                 .with_timeout(std::time::Duration::from_secs(60));
@@ -290,9 +298,10 @@ pub async fn get_remote_file(
     Ok(Some(fetched))
 }
 
-pub async fn download_remote_repository<P: AsRef<Path>>(
+pub async fn download_remote_repository<P: AsRef<Path>, E: Write>(
     remote_storage: &Arc<dyn ObjectStore>,
     out_dir: P,
+    std_err: &mut E,
 ) -> Result<usize, String> {
     let head_content = get_remote_head(remote_storage).await?;
 
@@ -319,31 +328,13 @@ pub async fn download_remote_repository<P: AsRef<Path>>(
         Ok(())
     };
 
-    atomic_write(
-        out_dir.as_ref().join("head"),
-        blake3::Hash::from_bytes(head_content.unwrap())
-            .to_string()
-            .as_bytes(),
-    )
-    .await?;
-
-    atomic_write(
-        out_dir.as_ref().join("files.redb"),
-        redb_content.unwrap().as_slice(),
-    )
-    .await?;
-
-    if let Some(snap) = history {
-        atomic_write(out_dir.as_ref().join("snapshot_history"), snap.as_slice()).await?;
-    }
-
     let mut stream_list = remote_storage.list(Some(
         &ObjPath::from_url_path("blobs").map_err(|e| format!("Illegal path: {e}"))?,
     ));
 
     let mut join_set: JoinSet<Result<(), String>> = JoinSet::new();
     let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_OPS));
-    let mut count = 0_usize;
+    let count = Arc::new(AtomicUsize::new(0));
 
     while let Some(s) = stream_list.next().await {
         let s = s.map_err(|e| format!("Error while listing chunks: {e}"))?;
@@ -355,11 +346,20 @@ pub async fn download_remote_repository<P: AsRef<Path>>(
             .ok_or_else(|| format!("Path without a file name"))?
             .to_string();
         let dest = out_dir.as_ref().join("blobs").join(filename);
+
+        // skip fetching already-fetched
+        // chunks
+        if dest.try_exists().is_ok_and(|t| t) {
+            continue;
+        }
+
         let permit = sem
             .clone()
             .acquire_owned()
             .await
             .map_err(|e| format!("Error while acquiring semaphore permit: {e}"))?;
+
+        let c = count.clone();
 
         join_set.spawn(async move {
             let _permit = permit;
@@ -389,21 +389,48 @@ pub async fn download_remote_repository<P: AsRef<Path>>(
                 .await
                 .map_err(|e| format!("Rename failed for {}: {e}", dest.display()))?;
 
+            c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
             Ok(())
         });
+    }
 
-        count += 1;
+    let mut failed = 0;
 
-        while let Some(res) = join_set.try_join_next() {
-            res.map_err(|e| format!("Task panicked while downloading: {e}"))??;
+    while let Some(res) = join_set.join_next().await {
+        let task_res = res.map_err(|e| format!("Task panicked while downloading: {e}"))?;
+        match task_res {
+            Ok(()) => {}
+            Err(e) => {
+                failed += 1;
+                let _ = writeln!(std_err, "{}", e);
+            }
         }
     }
 
-    while let Some(res) = join_set.join_next().await {
-        res.map_err(|e| format!("Task panicked while downloading: {e}"))??;
+    if failed > 0 {
+        return Err(format!("Failed to download {} chunks", failed));
     }
 
-    Ok(count)
+    atomic_write(
+        out_dir.as_ref().join("head"),
+        blake3::Hash::from_bytes(head_content.unwrap())
+            .to_string()
+            .as_bytes(),
+    )
+    .await?;
+
+    atomic_write(
+        out_dir.as_ref().join("files.redb"),
+        redb_content.unwrap().as_slice(),
+    )
+    .await?;
+
+    if let Some(snap) = history {
+        atomic_write(out_dir.as_ref().join("snapshot_history"), snap.as_slice()).await?;
+    }
+
+    Ok(count.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 impl BlobsDB {
@@ -467,12 +494,11 @@ impl BlobsDB {
                 .filename()
                 .ok_or_else(|| format!("Expected file to contain chunk hex"))?
                 .to_string();
-            let hash = blake3::Hash::from_str(&chunk_hex)
-                .map_err(|e| format!("invalid hash: {e}"))?
-                .as_bytes()
-                .to_owned();
+            let maybe_hash = blake3::Hash::from_str(&chunk_hex);
 
-            values.insert(hash, true);
+            if let Ok(hash) = maybe_hash {
+                values.insert(hash.as_bytes().to_owned(), true);
+            }
         }
 
         let sync_map = HashMap::from([(remote_name, values)]);
@@ -628,8 +654,6 @@ impl BlobsDB {
             let dst_path = ObjPath::from_url_path(format!("blobs/{}", &hash_str))
                 .map_err(|e| format!("Illegal path: {e}"))?;
 
-            // Backpressure: blocks the spawner once MAX_CONCURRENT_OPS blobs
-            // are in flight *or* waiting for a write slot
             let permit = sem
                 .clone()
                 .acquire_owned()

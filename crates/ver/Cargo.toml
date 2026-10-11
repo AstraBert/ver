@@ -1,10 +1,18 @@
 [package]
-name = "ver"
+name = "ver-vcs"
 version = "0.1.0-alpha"
 edition = "2024"
 readme = "README.md"
 description = "An intuitive, easy-to-use and non git-like version control system."
 license = "MIT"
+
+[[bin]]
+name = "ver"
+path = "src/main.rs"
+
+[lib]
+name = "ver"
+path = "src/lib.rs"
 
 [dependencies]
 serde = { workspace = true }
@@ -32,3 +40,7 @@ pretty-hex = ["dep:pretty-hex"]
 [dev-dependencies]
 tempdir = "0.3.7"
 serial_test = "3"
+async-trait = "0.1"
+futures = "0.3"
+object_store = { version = "0.14", features = ["aws", "gcp", "azure"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

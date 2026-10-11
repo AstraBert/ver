@@ -25,7 +25,7 @@ use crate::{
 
 pub const SNAPSHOT_TABLE: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("snapshots");
 pub const MAX_INFLIGHT_WRITES: usize = 16;
-pub const MAX_INFLIGHT_READS: usize = 256;
+pub const MAX_INFLIGHT_READS: usize = 32;
 
 pub static RT: OnceLock<Runtime> = OnceLock::new();
 

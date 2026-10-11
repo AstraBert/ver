@@ -693,7 +693,10 @@ fn main() -> Result<(), VerError> {
                 let out = io::stdout();
                 let mut handle = out.lock();
 
-                clone_from_remote(remote_name, dest, input, &mut handle)?;
+                let stderr = io::stderr();
+                let mut errhandle = stderr.lock();
+
+                clone_from_remote(remote_name, dest, input, &mut handle, &mut errhandle)?;
 
                 Ok(())
             }
@@ -720,7 +723,10 @@ fn main() -> Result<(), VerError> {
                 let out = io::stdout();
                 let mut handle = out.lock();
 
-                clone_from_remote(remote_name, dest, input, &mut handle)?;
+                let stderr = io::stderr();
+                let mut errhandle = stderr.lock();
+
+                clone_from_remote(remote_name, dest, input, &mut handle, &mut errhandle)?;
 
                 Ok(())
             }
@@ -738,7 +744,10 @@ fn main() -> Result<(), VerError> {
                 let out = io::stdout();
                 let mut handle = out.lock();
 
-                clone_from_remote(remote_name, dest, input, &mut handle)?;
+                let stderr = io::stderr();
+                let mut errhandle = stderr.lock();
+
+                clone_from_remote(remote_name, dest, input, &mut handle, &mut errhandle)?;
 
                 Ok(())
             }
