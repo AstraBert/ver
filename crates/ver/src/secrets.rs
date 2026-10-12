@@ -55,10 +55,10 @@ pub fn init_secrets<O: Write>(
             .filter(|l| !l.starts_with("# "))
             .collect::<Vec<&str>>();
         let key = lines.first().expect("Private key should be present");
-        let identity = age::x25519::Identity::from_str(*key)?;
+        let identity = age::x25519::Identity::from_str(key)?;
         fs::write(
             ver_recipients_file(),
-            format!("# {}\n{}", key_name, identity.to_public().to_string()),
+            format!("# {}\n{}", key_name, identity.to_public()),
         )?;
         writeln!(std_out, "Secrets have been successfully initialized")?;
         return Ok(());
@@ -109,7 +109,7 @@ fn get_private_key(key_file: Option<&str>) -> Result<String, VerError> {
             .filter(|l| !l.starts_with("# "))
             .collect::<Vec<&str>>();
         let key = lines.first().expect("Private key should be present");
-        let identity = age::x25519::Identity::from_str(*key)?;
+        let identity = age::x25519::Identity::from_str(key)?;
         return Ok(identity.to_string().expose_secret().to_owned());
     }
     let key_file = ver_key_file();
@@ -124,7 +124,7 @@ fn get_private_key(key_file: Option<&str>) -> Result<String, VerError> {
         .filter(|l| !l.starts_with("# "))
         .collect::<Vec<&str>>();
     let key = lines.first().expect("Private key should be present");
-    let identity = age::x25519::Identity::from_str(*key)?;
+    let identity = age::x25519::Identity::from_str(key)?;
 
     Ok(identity.to_string().expose_secret().to_owned())
 }

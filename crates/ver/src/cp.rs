@@ -64,7 +64,7 @@ pub fn copy<O: io::Write>(
 
             let par = relative.parent();
             if let Some(parent) = par
-                && parent != ""
+                && !parent.is_empty()
             {
                 let full_dir = dest_path.join(parent);
                 if !full_dir.is_dir() {

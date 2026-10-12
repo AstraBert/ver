@@ -343,7 +343,7 @@ pub async fn download_remote_repository<P: AsRef<Path>, E: Write>(
         let path = s.location;
         let filename = path
             .filename()
-            .ok_or_else(|| format!("Path without a file name"))?
+            .ok_or_else(|| "Path without a file name".to_string())?
             .to_string();
         let dest = out_dir.as_ref().join("blobs").join(filename);
 
@@ -492,7 +492,7 @@ impl BlobsDB {
             let chunk_hex = chunk_path
                 .location
                 .filename()
-                .ok_or_else(|| format!("Expected file to contain chunk hex"))?
+                .ok_or_else(|| "Expected file to contain chunk hex".to_string())?
                 .to_string();
             let maybe_hash = blake3::Hash::from_str(&chunk_hex);
 
@@ -635,7 +635,7 @@ impl BlobsDB {
 
             pending += 1;
 
-            if pending % DUMP_EVERY_N_CHUNKS == 0 {
+            if pending.is_multiple_of(DUMP_EVERY_N_CHUNKS) {
                 let intermediate: HashMap<String, HashMap<[u8; 32], bool>> = sync_map
                     .lock()
                     .map_err(|e| format!("Sync map mutex lock is poisoned: {e}"))?
@@ -651,7 +651,7 @@ impl BlobsDB {
             let hash = c.hash;
             let hash_str = blake3::Hash::from_bytes(hash).to_string();
             let src_path = self.directory.clone().join(hash_str.as_str());
-            let dst_path = ObjPath::from_url_path(format!("blobs/{}", &hash_str))
+            let dst_path = ObjPath::from_url_path(format!("blobs/{}", hash_str))
                 .map_err(|e| format!("Illegal path: {e}"))?;
 
             let permit = sem

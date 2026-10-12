@@ -208,8 +208,7 @@ fn fetch_conflict_contents(
     conflicts: &[(String, Vec<Chunk>, Vec<Chunk>, Vec<Chunk>)], // (path, base_chunks, our_chunks, their_chunks)
 ) -> Result<HashMap<String, (Vec<u8>, Vec<u8>, Vec<u8>)>, VerError> {
     let sem = Arc::new(Semaphore::new(MAX_INFLIGHT_READS));
-    let (tx, rx) =
-        mpsc::channel::<(usize, Result<(Vec<u8>, Vec<u8>, Vec<u8>), String>)>();
+    let (tx, rx) = mpsc::channel::<(usize, Result<(Vec<u8>, Vec<u8>, Vec<u8>), String>)>();
 
     for (i, (_, base_chunks, our_chunks, their_chunks)) in conflicts.iter().enumerate() {
         let tx = tx.clone();
@@ -621,8 +620,7 @@ pub fn merge_run<O: io::Write, E: io::Write>(
 
             // Concurrently fetch all conflicting file contents and resolve
             if !needs_three_way.is_empty() {
-                let contents =
-                    fetch_conflict_contents(&blobdb_a, &blobdb_b, &needs_three_way)?;
+                let contents = fetch_conflict_contents(&blobdb_a, &blobdb_b, &needs_three_way)?;
 
                 for (path, _, our_chunks, their_chunks) in &needs_three_way {
                     let (base_content, our_content, their_content) =

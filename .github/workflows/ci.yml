@@ -1,0 +1,202 @@
+name: CI - Rust
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v@**"
+    paths:
+      - "crates/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - ".github/workflows/ci.yml"
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Jake (also sets up Rust)
+        uses: AstraBert/setup-jake@v0.1.0
+
+      - name: Install Clippy
+        run: rustup component add clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run clippy
+        run: jake clippy
+
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Jake (also sets up Rust)
+        uses: AstraBert/setup-jake@v0.1.0
+
+      - name: Install Clippy
+        run: rustup component add rustfmt
+
+      - name: Check formatting
+        run: jake format
+
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Jake (also sets up Rust)
+        uses: AstraBert/setup-jake@v0.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+
+      - name: Install azurite
+        run: npm i -g azurite
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.25
+
+      - name: Install go tools
+        run: |
+            go install github.com/minio/mc && go install github.com/minio/minio && go install github.com/fsouza/fake-gcs-server
+
+      - name: Install az CLI
+        run: curl -fsSL 'https://azurecliprod.blob.core.windows.net/$root/deb_install.sh' | sudo bash
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run tests
+        run: jake test
+
+      - name: Run tests (all features)
+        run: jake test-all
+
+  test-windows:
+    name: Test on windows-latest
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.os == 'Windows' && '~\\.cargo\\registry' || '~/.cargo/registry' }}
+            ${{ runner.os == 'Windows' && '~\\.cargo\\git' || '~/.cargo/git' }}
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+
+      - name: Install azurite
+        run: npm i -g azurite
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.25
+
+      - name: Install go tools
+        run: |
+            go install github.com/minio/mc && go install github.com/minio/minio && go install github.com/fsouza/fake-gcs-server
+
+      - name: Install az CLI
+        run: winget install --exact --id Microsoft.AzureCLI
+
+      - name: Run tests
+        run: cargo test --release
+
+      - name: Run tests (all features)
+        run: cargo test --all-features --release
+
+
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    needs:
+      - clippy
+      - format
+      - test
+    permissions:
+      contents: write # to be able to publish a GitHub release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Login to cargo
+        run: cargo login <<< $CARGO_API_TOKEN
+        env:
+          CARGO_API_TOKEN: ${{ secrets.CARGO_API_TOKEN }}
+
+      - name: Publish to crates
+        run: cargo publish --workspace
+        env:
+          CARGO_API_TOKEN: ${{ secrets.CARGO_API_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          generateReleaseNotes: true

@@ -32,7 +32,7 @@ pub fn clone_from_remote<O: Write, E: Write>(
     }
 
     if !p.join("blobs").exists() {
-        fs::create_dir(&p.join("blobs"))?;
+        fs::create_dir(p.join("blobs"))?;
     }
 
     let downloaded_chunks =
@@ -48,9 +48,9 @@ pub fn clone_from_remote<O: Write, E: Write>(
 
     rt().block_on(async { blobdb.create_sync_map_after_download(remote_name).await })?;
 
-    let head = get_head(&p)?.ok_or_else(|| "No head found in the cloned ver repository")?;
+    let head = get_head(&p)?.ok_or("No head found in the cloned ver repository")?;
 
-    let redb = Database::open(&p.join(REDB_PATH))?;
+    let redb = Database::open(p.join(REDB_PATH))?;
 
     let tx = redb.begin_read()?;
     let table = tx.open_table(SNAPSHOT_TABLE)?;
@@ -65,7 +65,7 @@ pub fn clone_from_remote<O: Write, E: Write>(
         for (path, chunks) in snap.repository_state {
             let full_path = p
                 .parent()
-                .ok_or_else(|| "Could not find parent for the cloned ver repository")?
+                .ok_or("Could not find parent for the cloned ver repository")?
                 .join(path);
 
             if let Some(par) = full_path.parent()

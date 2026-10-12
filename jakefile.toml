@@ -1,0 +1,7 @@
+build="cargo build --release -p ver"
+test="cargo test --release"
+test-all="cargo test --release --all-features"
+clippy = "cargo clippy --release --all-features"
+clippy-fix = "cargo clippy --release --all-features --fix --allow-dirty"
+format = "cargo fmt --all -- --check"
+format-fix = "cargo fmt --all"

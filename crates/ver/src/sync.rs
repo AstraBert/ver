@@ -110,11 +110,11 @@ pub fn sync_with_remote_storage<O: Write, E: Write>(
                 .into(),
         );
     }
-    let redb_content = fs::read(&resolved.join(REDB_PATH))?;
-    let history_content = fs::read(&resolved.join(SNAPSHOT_HISTORY_FILE))?;
+    let redb_content = fs::read(resolved.join(REDB_PATH))?;
+    let history_content = fs::read(resolved.join(SNAPSHOT_HISTORY_FILE))?;
 
     let blobsdb = init_blobs_db(&resolved)?;
-    let redb = Database::open(&resolved.join(REDB_PATH))?;
+    let redb = Database::open(resolved.join(REDB_PATH))?;
     let remote_storage = get_object_store(input)?;
     let remote_head = rt().block_on(async { get_remote_head(&remote_storage).await })?;
 
