@@ -59,7 +59,11 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
     // open databases
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
-    let repo = resolved.parent().unwrap();
+    let repo = resolved
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap_or_else(|_| resolved.parent().unwrap().to_path_buf());
     let blobdb = Arc::new(init_blobs_db(&resolved)?);
 
     let files = collect_files(&[&*repo.to_string_lossy()])?;
@@ -105,7 +109,7 @@ fn store_files() -> Result<(blake3::Hash, AllocVec<u8>), VerError> {
         if r.is_err() {
             return Err(r.unwrap_err().into());
         }
-        let rel = files[n].strip_prefix(repo).expect("Should strip prefix");
+        let rel = files[n].strip_prefix(&repo).expect("Should strip prefix");
         let chunks = r.unwrap();
         repo_state.insert(rel.to_string_lossy().to_string(), chunks);
     }
@@ -235,7 +239,11 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
     // open databases
     let current_dir = env::current_dir()?;
     let resolved = resolve_ver_dir_path(current_dir)?;
-    let repo = resolved.parent().unwrap();
+    let repo = resolved
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .unwrap_or_else(|_| resolved.parent().unwrap().to_path_buf());
     let redb = Database::open(resolved.join(REDB_PATH))?;
     let blobdb = Arc::new(init_blobs_db(&resolved)?);
 
@@ -265,7 +273,7 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
 
             for p in ps {
                 let rel = p
-                    .strip_prefix(repo)
+                    .strip_prefix(&repo)
                     .expect("Repository should always contain its files");
                 let str_p = &*rel.to_string_lossy();
                 if let Some(f) = state.get(str_p).cloned() {
@@ -316,7 +324,7 @@ pub fn goto<S: AsRef<str>>(snapshot_id: &str, paths: Option<Vec<S>>) -> Result<(
 
             for p in ps {
                 let rel = p
-                    .strip_prefix(repo)
+                    .strip_prefix(&repo)
                     .expect("Repository should always contain its files");
                 let str_p = &*rel.to_string_lossy();
                 if let Some(f) = state.get(str_p).cloned() {
