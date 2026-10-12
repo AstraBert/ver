@@ -3,6 +3,8 @@ use std::io;
 use blobsdb::GetObjectStoreInput;
 use clap::{Parser, Subcommand};
 
+#[cfg(feature = "minus")]
+use ver::commons;
 use ver::{
     clone::clone_from_remote,
     commons::unwrap_maybe_secret,
@@ -492,17 +494,22 @@ fn main() -> Result<(), VerError> {
             from,
             against,
         } => {
+            let stderr = io::stderr();
+            let mut err_handle = stderr.lock();
             #[cfg(not(feature = "minus"))]
             {
                 let stdout = io::stdout();
                 let mut handle = stdout.lock();
+                diff_file(&path, from, against, &mut handle, &mut err_handle)
             }
             #[cfg(feature = "minus")]
-            let mut handle = minus::Pager::new();
-
-            let stderr = io::stderr();
-            let mut err_handle = stderr.lock();
-            diff_file(&path, from, against, &mut handle, &mut err_handle)
+            {
+                let pager = minus::Pager::new();
+                let mut handle = commons::PagerWriter::new(pager);
+                diff_file(&path, from, against, &mut handle, &mut err_handle)?;
+                minus::page_all(handle.pager)?;
+                Ok(())
+            }
         }
         Commands::Merge { merge_cmd } => match merge_cmd {
             MergeCommands::Run {
