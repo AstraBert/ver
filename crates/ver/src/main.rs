@@ -492,9 +492,15 @@ fn main() -> Result<(), VerError> {
             from,
             against,
         } => {
-            let stdout = io::stdout();
+            #[cfg(not(feature = "minus"))]
+            {
+                let stdout = io::stdout();
+                let mut handle = stdout.lock();
+            }
+            #[cfg(feature = "minus")]
+            let mut handle = minus::Pager::new();
+
             let stderr = io::stderr();
-            let mut handle = stdout.lock();
             let mut err_handle = stderr.lock();
             diff_file(&path, from, against, &mut handle, &mut err_handle)
         }

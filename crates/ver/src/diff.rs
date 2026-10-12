@@ -1,5 +1,5 @@
 use std::{
-    env, io,
+    env, fmt, io,
     panic::AssertUnwindSafe,
     str::FromStr,
     sync::{Arc, mpsc},
@@ -53,7 +53,7 @@ async fn get_file_content(
     Ok(None)
 }
 
-pub fn diff_file<O: io::Write, E: io::Write>(
+pub fn diff_file<O: fmt::Write, E: fmt::Write>(
     path: &str,
     from: Option<String>,
     against: String,
