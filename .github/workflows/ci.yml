@@ -87,10 +87,15 @@ jobs:
 
       - name: Install go tools
         run: |
-            go install github.com/minio/mc && go install github.com/minio/minio && go install github.com/fsouza/fake-gcs-server
+            go install github.com/minio/mc@latest && go install github.com/minio/minio@latest && go install github.com/fsouza/fake-gcs-server@latest
 
-      - name: Install az CLI
+      - name: Install az CLI (Ubuntu)
+        if: runner.os == 'Linux'
         run: curl -fsSL 'https://azurecliprod.blob.core.windows.net/$root/deb_install.sh' | sudo bash
+
+      - name: Install az CLI (macOS)
+        if: runner.os == 'macOS'
+        run: brew install azure-cli
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -146,7 +151,7 @@ jobs:
 
       - name: Install go tools
         run: |
-            go install github.com/minio/mc && go install github.com/minio/minio && go install github.com/fsouza/fake-gcs-server
+            go install github.com/minio/mc@latest && go install github.com/minio/minio@latest && go install github.com/fsouza/fake-gcs-server@latest
 
       - name: Install az CLI
         run: winget install --exact --id Microsoft.AzureCLI
