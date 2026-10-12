@@ -154,7 +154,7 @@ jobs:
             go install github.com/minio/mc@latest && go install github.com/minio/minio@latest && go install github.com/fsouza/fake-gcs-server@latest
 
       - name: Install az CLI
-        run: winget install --exact --id Microsoft.AzureCLI
+        run: winget install --accept-source-agreements --accept-package-agreements --silent --exact --id Microsoft.AzureCLI
 
       - name: Run tests
         run: cargo test --release
