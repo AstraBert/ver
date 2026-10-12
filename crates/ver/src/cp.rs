@@ -103,6 +103,12 @@ pub fn copy<O: io::Write>(
             fs::write(fl, res.unwrap())?;
         }
 
+        // Close the databases before copying to avoid file locking issues on Windows
+        drop(table);
+        drop(trx);
+        drop(redb);
+        drop(blobdb);
+
         copy_dir(resolved, dest_path, &CopyOptions::new())?;
 
         copied += 1;

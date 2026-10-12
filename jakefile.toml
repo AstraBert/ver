@@ -1,4 +1,4 @@
-build="cargo build --release -p ver"
+build="cargo build --release -p ver-vcs"
 test="cargo test --release"
 test-all="cargo test --release --all-features"
 clippy = "cargo clippy --release --all-features"
