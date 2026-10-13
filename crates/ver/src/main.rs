@@ -483,11 +483,38 @@ fn main() -> Result<(), VerError> {
             offset,
             limit,
         } => {
-            let out = io::stdout();
-            let handle = out.lock();
             let stderr = io::stderr();
             let mut err_handle = stderr.lock();
-            show_file(&path, snapshot_id, offset, limit, handle, &mut err_handle)
+
+            #[cfg(not(feature = "minus"))]
+            {
+                let out = io::stdout();
+                let mut handle = out.lock();
+
+                show_file(
+                    &path,
+                    snapshot_id,
+                    offset,
+                    limit,
+                    &mut handle,
+                    &mut err_handle,
+                )
+            }
+            #[cfg(feature = "minus")]
+            {
+                let pager = minus::Pager::new();
+                let mut handle = commons::PagerWriter::new(pager);
+                show_file(
+                    &path,
+                    snapshot_id,
+                    offset,
+                    limit,
+                    &mut handle,
+                    &mut err_handle,
+                )?;
+                minus::page_all(handle.pager)?;
+                Ok(())
+            }
         }
         Commands::Diff {
             path,
@@ -518,45 +545,102 @@ fn main() -> Result<(), VerError> {
                 our_snapshot,
                 their_snapshot,
             } => {
-                let stdout = io::stdout();
                 let stderr = io::stderr();
-                let mut handle = stdout.lock();
                 let mut err_handle = stderr.lock();
-                merge_run::<io::StdoutLock<'_>, io::StderrLock<'_>>(
-                    from.into(),
-                    &name,
-                    our_snapshot,
-                    their_snapshot,
-                    &mut handle,
-                    &mut err_handle,
-                )
+                #[cfg(not(feature = "minus"))]
+                {
+                    let stdout = io::stdout();
+                    let mut handle = stdout.lock();
+                    merge_run::<io::StdoutLock<'_>, io::StderrLock<'_>>(
+                        from.into(),
+                        &name,
+                        our_snapshot,
+                        their_snapshot,
+                        &mut handle,
+                        &mut err_handle,
+                    )
+                }
+                #[cfg(feature = "minus")]
+                {
+                    let pager = minus::Pager::new();
+                    let mut handle = commons::PagerWriter::new(pager);
+                    merge_run::<commons::PagerWriter, io::StderrLock<'_>>(
+                        from.into(),
+                        &name,
+                        our_snapshot,
+                        their_snapshot,
+                        &mut handle,
+                        &mut err_handle,
+                    )?;
+                    minus::page_all(handle.pager)?;
+                    Ok(())
+                }
             }
             MergeCommands::Pick { name, our, their } => {
-                let stdout = io::stdout();
                 let stderr = io::stderr();
-                let mut handle = stdout.lock();
                 let mut err_handle = stderr.lock();
-                merge_pick(
-                    &name,
-                    our.iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<&str>>()
-                        .as_slice(),
-                    their
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<&str>>()
-                        .as_slice(),
-                    &mut handle,
-                    &mut err_handle,
-                )
+
+                #[cfg(not(feature = "minus"))]
+                {
+                    let stdout = io::stdout();
+                    let mut handle = stdout.lock();
+
+                    merge_pick(
+                        &name,
+                        our.iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<&str>>()
+                            .as_slice(),
+                        their
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<&str>>()
+                            .as_slice(),
+                        &mut handle,
+                        &mut err_handle,
+                    )
+                }
+                #[cfg(feature = "minus")]
+                {
+                    let pager = minus::Pager::new();
+                    let mut handle = commons::PagerWriter::new(pager);
+
+                    merge_pick(
+                        &name,
+                        our.iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<&str>>()
+                            .as_slice(),
+                        their
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<&str>>()
+                            .as_slice(),
+                        &mut handle,
+                        &mut err_handle,
+                    )?;
+                    minus::page_all(handle.pager)?;
+                    Ok(())
+                }
             }
             MergeCommands::End { name } => {
-                let stdout = io::stdout();
                 let stderr = io::stderr();
-                let mut handle = stdout.lock();
                 let mut err_handle = stderr.lock();
-                merge_end(&name, &mut handle, &mut err_handle)
+
+                #[cfg(not(feature = "minus"))]
+                {
+                    let stdout = io::stdout();
+                    let mut handle = stdout.lock();
+                    merge_end(&name, &mut handle, &mut err_handle)
+                }
+                #[cfg(feature = "minus")]
+                {
+                    let pager = minus::Pager::new();
+                    let mut handle = commons::PagerWriter::new(pager);
+                    merge_end(&name, &mut handle, &mut err_handle)?;
+                    minus::page_all(handle.pager)?;
+                    Ok(())
+                }
             }
         },
         Commands::Secrets { secret_cmd } => match secret_cmd {
