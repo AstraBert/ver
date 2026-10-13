@@ -36,7 +36,7 @@ pub fn show_file<O: io::Write, E: io::Write>(
     snapshot_id: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
-    mut out: O,
+    out: &mut O,
     std_err: &mut E,
 ) -> Result<(), VerError> {
     let current_dir = env::current_dir()?;
