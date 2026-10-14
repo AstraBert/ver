@@ -3393,6 +3393,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ver-fs"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "tokio",
+]
+
+[[package]]
 name = "ver-vcs"
 version = "0.1.0-alpha"
 dependencies = [
