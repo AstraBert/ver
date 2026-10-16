@@ -3397,6 +3397,9 @@ name = "ver-fs"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures-util",
+ "ignore",
+ "object_store",
  "tokio",
 ]
 

@@ -1,5 +1,7 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
+use futures_util::stream::StreamExt;
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload, path::Path as ObjPath};
 use tokio::fs;
 
 use crate::errors::FsError;
@@ -16,29 +18,36 @@ pub trait Fs {
     type ListIter: Iterator<Item = Self::Entry>;
 
     async fn read<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<Vec<u8>, FsError>;
-    async fn write<S: AsRef<str> + Send + Sync, D: AsRef<[u8]> + Sync + Send>(
+    async fn write<S: AsRef<str> + Send + Sync, D: AsRef<[u8]> + Sync + Send + 'static>(
         &self,
         path: S,
         data: D,
     ) -> Result<(), FsError>;
     async fn delete<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<(), FsError>;
-    async fn list<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<Self::ListIter, FsError>;
+    async fn list<
+        S: AsRef<str> + Send + Sync + 'static,
+        F: Fn(S) -> Result<Self::ListIter, FsError> + Send + Sync + 'static,
+    >(
+        &self,
+        path: S,
+        walker_fn: F,
+    ) -> Result<Self::ListIter, FsError>;
     async fn create_dir<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<(), FsError>;
 }
 
-impl DirEntry for std::fs::DirEntry {
+impl DirEntry for ignore::DirEntry {
     fn path(&self) -> PathBuf {
-        self.path()
+        self.path().to_owned()
     }
 }
 
 #[derive(Debug)]
 pub struct DiskListIterator {
-    inner: std::vec::IntoIter<std::fs::DirEntry>,
+    inner: std::vec::IntoIter<ignore::DirEntry>,
 }
 
 impl Iterator for DiskListIterator {
-    type Item = std::fs::DirEntry;
+    type Item = ignore::DirEntry;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next()
@@ -50,7 +59,7 @@ pub struct DiskFs {}
 
 #[async_trait::async_trait]
 impl Fs for DiskFs {
-    type Entry = std::fs::DirEntry;
+    type Entry = ignore::DirEntry;
     type ListIter = DiskListIterator;
 
     async fn read<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<Vec<u8>, FsError> {
@@ -61,7 +70,7 @@ impl Fs for DiskFs {
         Ok(res)
     }
 
-    async fn write<S: AsRef<str> + Send + Sync, D: AsRef<[u8]> + Sync + Send>(
+    async fn write<S: AsRef<str> + Send + Sync, D: AsRef<[u8]> + Sync + Send + 'static>(
         &self,
         path: S,
         data: D,
@@ -83,17 +92,58 @@ impl Fs for DiskFs {
             .map_err(|e| FsError::CreateDir(e.to_string()))
     }
 
-    async fn list<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<Self::ListIter, FsError> {
-        let path = path.as_ref().to_owned();
-        let entries = tokio::task::spawn_blocking(move || {
-            std::fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()
-        })
-        .await
-        .map_err(|e| FsError::List(e.to_string()))?
-        .map_err(|e| FsError::List(e.to_string()))?;
+    async fn list<
+        S: AsRef<str> + Send + Sync + 'static,
+        F: Fn(S) -> Result<Self::ListIter, FsError> + Send + Sync + 'static,
+    >(
+        &self,
+        path: S,
+        walker_fn: F,
+    ) -> Result<Self::ListIter, FsError> {
+        let entries = tokio::task::spawn_blocking(move || walker_fn(path))
+            .await
+            .map_err(|e| FsError::List(e.to_string()))??;
 
-        Ok(DiskListIterator {
-            inner: entries.into_iter(),
-        })
+        Ok(entries)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ObjectStoreFs {
+    pub object_store: Arc<dyn ObjectStore>,
+}
+
+#[allow(dead_code)]
+impl ObjectStoreFs {
+    async fn read<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<Vec<u8>, FsError> {
+        let response = self
+            .object_store
+            .get(&ObjPath::from_url_path(path).map_err(|e| FsError::Read(e.to_string()))?)
+            .await
+            .map_err(|e| FsError::Read(e.to_string()))?;
+        let mut stream = response.into_stream();
+        let mut v: Vec<u8> = Vec::new();
+        while let Some(b) = stream.next().await {
+            let bytes = b.map_err(|e| FsError::Read(e.to_string()))?;
+            v.extend_from_slice(&bytes);
+        }
+
+        Ok(v)
+    }
+
+    async fn write<S: AsRef<str> + Send + Sync, D: AsRef<[u8]> + Sync + Send + 'static>(
+        &self,
+        path: S,
+        data: D,
+    ) -> Result<(), FsError> {
+        self.object_store
+            .put(
+                &ObjPath::from_url_path(path).map_err(|e| FsError::Write(e.to_string()))?,
+                PutPayload::from_iter(data.as_ref().iter().copied()),
+            )
+            .await
+            .map_err(|e| FsError::Write(e.to_string()))?;
+
+        Ok(())
     }
 }

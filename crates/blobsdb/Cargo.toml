@@ -13,7 +13,7 @@ path = "src/lib.rs"
 [dependencies]
 blake3 = { workspace = true }
 fastcdc = { version = "5.0.0", features = ["tokio", "tokio-stream"] }
-object_store = { version = "0.14", features = ["aws", "gcp", "azure"] }
+object_store = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = "0.1.19"
 tokio-util = { version = "0.7", features = ["io"] }
