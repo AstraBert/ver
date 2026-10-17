@@ -76,6 +76,17 @@ pub fn unwrap_maybe_secret(
     Ok(None)
 }
 
+pub fn resolve_maybe_secret(ms: &str, key_file: Option<&str>) -> Result<String, VerError> {
+    if ms.starts_with("secrets/") {
+        let secret = ms.replacen("secrets/", "", 1);
+        let mut _out = Vec::new();
+        let value = get_secret(&secret, key_file, false, &mut _out)?;
+        Ok(value)
+    } else {
+        Ok(ms.to_owned())
+    }
+}
+
 #[cfg(feature = "minus")]
 pub struct PagerWriter {
     pub pager: Pager,

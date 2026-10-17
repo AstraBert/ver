@@ -1,4 +1,7 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, mpsc},
+};
 
 use futures_util::stream::StreamExt;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload, path::Path as ObjPath};
@@ -30,7 +33,7 @@ pub trait Fs {
     >(
         &self,
         path: S,
-        walker_fn: F,
+        walker_fn: Option<F>,
     ) -> Result<Self::ListIter, FsError>;
     async fn create_dir<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<(), FsError>;
 }
@@ -54,8 +57,18 @@ impl Iterator for DiskListIterator {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct DiskFs {}
+#[derive(Debug, Default, Clone)]
+pub struct DiskFs {
+    pub base_dir: PathBuf,
+}
+
+impl DiskFs {
+    pub fn new(base_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            base_dir: base_dir.into(),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl Fs for DiskFs {
@@ -98,13 +111,18 @@ impl Fs for DiskFs {
     >(
         &self,
         path: S,
-        walker_fn: F,
+        walker_fn: Option<F>,
     ) -> Result<Self::ListIter, FsError> {
-        let entries = tokio::task::spawn_blocking(move || walker_fn(path))
-            .await
-            .map_err(|e| FsError::List(e.to_string()))??;
+        if let Some(walker) = walker_fn {
+            let entries = tokio::task::spawn_blocking(move || walker(path))
+                .await
+                .map_err(|e| FsError::List(e.to_string()))??;
 
-        Ok(entries)
+            return Ok(entries);
+        }
+        Err(FsError::List(
+            "Walker function cannot be None for DiskFs".into(),
+        ))
     }
 }
 
@@ -113,18 +131,54 @@ pub struct ObjectStoreFs {
     pub object_store: Arc<dyn ObjectStore>,
 }
 
-#[allow(dead_code)]
-impl ObjectStoreFs {
+#[derive(Debug, Clone)]
+pub struct ObjectStoreEntry {
+    pub location: ObjPath,
+}
+
+impl ObjectStoreEntry {
+    pub fn new(location: ObjPath) -> Self {
+        Self { location }
+    }
+}
+
+impl DirEntry for ObjectStoreEntry {
+    fn path(&self) -> PathBuf {
+        PathBuf::from(self.location.to_string())
+    }
+}
+
+#[derive(Debug)]
+pub struct ObjectStoreIterator {
+    inner: std::sync::mpsc::IntoIter<ObjectStoreEntry>,
+}
+
+impl Iterator for ObjectStoreIterator {
+    type Item = ObjectStoreEntry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
+#[async_trait::async_trait]
+impl Fs for ObjectStoreFs {
+    type Entry = ObjectStoreEntry;
+    type ListIter = ObjectStoreIterator;
+
     async fn read<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<Vec<u8>, FsError> {
         let response = self
             .object_store
-            .get(&ObjPath::from_url_path(path).map_err(|e| FsError::Read(e.to_string()))?)
+            .get(
+                &ObjPath::from_url_path(path)
+                    .map_err(|e| FsError::Read(format!("Invalid object path: {}", e)))?,
+            )
             .await
-            .map_err(|e| FsError::Read(e.to_string()))?;
+            .map_err(|e| FsError::Read(format!("Read operation failed: {}", e)))?;
         let mut stream = response.into_stream();
         let mut v: Vec<u8> = Vec::new();
         while let Some(b) = stream.next().await {
-            let bytes = b.map_err(|e| FsError::Read(e.to_string()))?;
+            let bytes = b.map_err(|e| FsError::Read(format!("Bytes streaming failed: {}", e)))?;
             v.extend_from_slice(&bytes);
         }
 
@@ -138,12 +192,71 @@ impl ObjectStoreFs {
     ) -> Result<(), FsError> {
         self.object_store
             .put(
-                &ObjPath::from_url_path(path).map_err(|e| FsError::Write(e.to_string()))?,
+                &ObjPath::from_url_path(path)
+                    .map_err(|e| FsError::Write(format!("Invalid object path: {}", e)))?,
                 PutPayload::from_iter(data.as_ref().iter().copied()),
             )
             .await
-            .map_err(|e| FsError::Write(e.to_string()))?;
+            .map_err(|e| FsError::Write(format!("Write operation failed: {}", e)))?;
 
         Ok(())
+    }
+
+    async fn delete<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<(), FsError> {
+        self.object_store
+            .delete(
+                &ObjPath::from_url_path(path)
+                    .map_err(|e| FsError::Delete(format!("Invalid object path: {}", e)))?,
+            )
+            .await
+            .map_err(|e| FsError::Delete(format!("Delete operation failed: {}", e)))?;
+        Ok(())
+    }
+
+    // no-op, object stores can't create directories
+    async fn create_dir<S: AsRef<str> + Send + Sync>(&self, _path: S) -> Result<(), FsError> {
+        Ok(())
+    }
+
+    async fn list<
+        S: AsRef<str> + Send + Sync + 'static,
+        F: Fn(S) -> Result<Self::ListIter, FsError> + Send + Sync + 'static,
+    >(
+        &self,
+        path: S,
+        walker_fn: Option<F>,
+    ) -> Result<Self::ListIter, FsError> {
+        if walker_fn.is_some() {
+            return Err(FsError::List(
+                "ObjectStore does not support custom walker functions".into(),
+            ));
+        }
+
+        let (tx, rx) = mpsc::sync_channel(1);
+        let handle = tokio::runtime::Handle::current();
+
+        let stream = self
+            .object_store
+            .list(Some(&ObjPath::from_url_path(path).map_err(|e| {
+                FsError::Delete(format!("Invalid object path: {}", e))
+            })?));
+
+        handle.spawn(async move {
+            let mut stream = Box::pin(stream);
+            while let Some(item) = stream.next().await {
+                if item.is_ok() {
+                    let entry = ObjectStoreEntry::new(item.unwrap().location);
+                    if tx.send(entry).is_err() {
+                        break; // consumer dropped the iterator
+                    }
+                } else {
+                    break; // break on first error
+                }
+            }
+        });
+
+        Ok(ObjectStoreIterator {
+            inner: rx.into_iter(),
+        })
     }
 }
