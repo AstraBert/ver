@@ -1,5 +1,6 @@
 pub mod clone;
 pub mod commons;
+pub mod context;
 pub mod cp;
 pub mod diff;
 pub mod errors;

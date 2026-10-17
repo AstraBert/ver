@@ -6,8 +6,9 @@ use std::{
 use blobsdb::{BlobsDB, get_object_store};
 use redb::{Database, Error as RedbError};
 
-use crate::errors::VerError;
+use crate::{context::VerContext, errors::VerError};
 
+pub const VER_CONTEXT: &str = "ctx.json";
 pub const VER_DIRECTORY: &str = ".ver";
 pub const SNAPSHOT_HISTORY_FILE: &str = "snapshot_history";
 pub const REDB_PATH: &str = "files.redb";
@@ -42,6 +43,9 @@ pub fn initialize<O: io::Write>(directory: Option<&str>, std_out: &mut O) -> Res
     );
     let _ = init_blobs_db(&init_dir.join(VER_DIRECTORY))?;
     let _ = create_redb(&init_dir.join(VER_DIRECTORY))?;
+    let ctx = VerContext::default();
+    let content = serde_json::to_string_pretty(&ctx)?;
+    fs::write(init_dir.join(VER_DIRECTORY).join(VER_CONTEXT), content)?;
     fs::write(init_dir.join(VER_DIRECTORY).join(SNAPSHOT_HISTORY_FILE), "")?;
     fs::write(init_dir.join(VER_DIRECTORY).join(HEAD_PATH), "")?;
 
