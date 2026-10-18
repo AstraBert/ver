@@ -11,7 +11,7 @@ use std::io;
 
 use crate::{
     errors::VerError,
-    init::{HEAD_PATH, VER_DIRECTORY},
+    init::{HEAD_PATH, VER_CONTEXT, VER_DIRECTORY},
     secrets::get_secret,
 };
 
@@ -126,4 +126,18 @@ impl io::Write for PagerWriter {
     fn flush(&mut self) -> io::Result<()> {
         Ok(()) // the pager has no buffering on our side to flush
     }
+}
+
+pub fn global_context() -> Result<PathBuf, VerError> {
+    let ctx = dirs::home_dir()
+        .expect("Expecting a HOME directory")
+        .join(VER_DIRECTORY)
+        .join(VER_CONTEXT);
+    if let Some(par) = ctx.parent()
+        && !par.exists()
+    {
+        fs::create_dir(par)?;
+    }
+
+    Ok(ctx)
 }

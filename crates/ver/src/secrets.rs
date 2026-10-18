@@ -10,7 +10,7 @@ use std::{
 use age::secrecy::ExposeSecret;
 use redb::Value;
 
-use crate::{commons::resolve_ver_dir_path, errors::VerError};
+use crate::{commons::resolve_ver_dir_path, errors::VerError, init::VER_DIRECTORY};
 
 const VER_LOCAL_SECRETS: &str = ".versecrets.json";
 static VER_RECIPIENTS_FILE: OnceLock<PathBuf> = OnceLock::new();
@@ -20,7 +20,7 @@ fn ver_recipients_file() -> &'static PathBuf {
     VER_RECIPIENTS_FILE.get_or_init(|| {
         dirs::home_dir()
             .expect("home directory should be resolved")
-            .join(".ver")
+            .join(VER_DIRECTORY)
             .join("recipients.txt")
     })
 }
@@ -29,7 +29,7 @@ fn ver_key_file() -> &'static PathBuf {
     VER_KEY_FILE.get_or_init(|| {
         dirs::home_dir()
             .expect("home directory should be resolved")
-            .join(".ver")
+            .join(VER_DIRECTORY)
             .join("keys.txt")
     })
 }

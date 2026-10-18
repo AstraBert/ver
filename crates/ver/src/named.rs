@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use redb::{Database, ReadableDatabase, TableDefinition};
+use ver_kv::KVStore;
 
 use crate::errors::VerError;
 
@@ -16,13 +19,11 @@ pub fn name_snapshot(redb: &Database, snapshot_id: [u8; 32], name: &str) -> Resu
     Ok(())
 }
 
-pub fn get_snapshot_by_name(redb: &Database, name: &str) -> Result<[u8; 32], VerError> {
-    let tx = redb.begin_read()?;
-    let table = tx.open_table(NAMES_TABLE)?;
-    let maybe_entry = table.get(name)?;
+pub fn get_snapshot_by_name(kv: &Arc<dyn KVStore>, name: &str) -> Result<[u8; 32], VerError> {
+    let maybe_entry = kv.get_name(name)?;
 
     if let Some(entry) = maybe_entry {
-        return Ok(entry.value());
+        return Ok(entry);
     }
 
     Err(format!("No snapshot named {} was found", name).into())

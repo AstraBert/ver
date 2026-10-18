@@ -15,27 +15,17 @@ pub trait DirEntry: Send + Sync {
     fn path(&self) -> PathBuf;
 }
 
-#[async_trait::async_trait]
-pub trait Fs {
-    type Entry: DirEntry;
-    type ListIter: Iterator<Item = Self::Entry>;
+pub type EntryIter = Box<dyn Iterator<Item = Box<dyn DirEntry>> + Send>;
+pub type Walker = Box<dyn Fn(&str) -> Result<EntryIter, FsError> + Send + Sync>;
 
-    async fn read<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<Vec<u8>, FsError>;
-    async fn write<S: AsRef<str> + Send + Sync, D: AsRef<[u8]> + Sync + Send + 'static>(
-        &self,
-        path: S,
-        data: D,
-    ) -> Result<(), FsError>;
-    async fn delete<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<(), FsError>;
-    async fn list<
-        S: AsRef<str> + Send + Sync + 'static,
-        F: Fn(S) -> Result<Self::ListIter, FsError> + Send + Sync + 'static,
-    >(
-        &self,
-        path: S,
-        walker_fn: Option<F>,
-    ) -> Result<Self::ListIter, FsError>;
-    async fn create_dir<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<(), FsError>;
+#[async_trait::async_trait]
+pub trait Fs<'a> {
+    async fn read(&'a self, path: &'a str) -> Result<Vec<u8>, FsError>;
+    async fn write(&'a self, path: &'a str, data: &'a [u8]) -> Result<(), FsError>;
+    async fn delete(&'a self, path: &'a str) -> Result<(), FsError>;
+    async fn list(&'a self, path: &'a str, walker_fn: Option<Walker>)
+    -> Result<EntryIter, FsError>;
+    async fn create_dir(&'a self, path: &'a str) -> Result<(), FsError>;
 }
 
 impl DirEntry for ignore::DirEntry {
@@ -47,6 +37,12 @@ impl DirEntry for ignore::DirEntry {
 #[derive(Debug)]
 pub struct DiskListIterator {
     inner: std::vec::IntoIter<ignore::DirEntry>,
+}
+
+impl DiskListIterator {
+    pub fn into_entry_iter(self) -> EntryIter {
+        Box::new(self.map(|e| Box::new(e) as Box<dyn DirEntry>))
+    }
 }
 
 impl Iterator for DiskListIterator {
@@ -71,50 +67,41 @@ impl DiskFs {
 }
 
 #[async_trait::async_trait]
-impl Fs for DiskFs {
-    type Entry = ignore::DirEntry;
-    type ListIter = DiskListIterator;
-
-    async fn read<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<Vec<u8>, FsError> {
-        let res = fs::read(path.as_ref())
+impl<'a> Fs<'a> for DiskFs {
+    async fn read(&'a self, path: &'a str) -> Result<Vec<u8>, FsError> {
+        let res = fs::read(path)
             .await
             .map_err(|e| FsError::Read(e.to_string()))?;
 
         Ok(res)
     }
 
-    async fn write<S: AsRef<str> + Send + Sync, D: AsRef<[u8]> + Sync + Send + 'static>(
-        &self,
-        path: S,
-        data: D,
-    ) -> Result<(), FsError> {
-        fs::write(path.as_ref(), data)
+    async fn write(&'a self, path: &'a str, data: &'a [u8]) -> Result<(), FsError> {
+        fs::write(path, data)
             .await
             .map_err(|e| FsError::Write(e.to_string()))
     }
 
-    async fn delete<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<(), FsError> {
-        fs::remove_file(path.as_ref())
+    async fn delete(&'a self, path: &'a str) -> Result<(), FsError> {
+        fs::remove_file(path)
             .await
             .map_err(|e| FsError::Delete(e.to_string()))
     }
 
-    async fn create_dir<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<(), FsError> {
-        fs::create_dir_all(path.as_ref())
+    async fn create_dir(&'a self, path: &'a str) -> Result<(), FsError> {
+        fs::create_dir_all(path)
             .await
             .map_err(|e| FsError::CreateDir(e.to_string()))
     }
 
-    async fn list<
-        S: AsRef<str> + Send + Sync + 'static,
-        F: Fn(S) -> Result<Self::ListIter, FsError> + Send + Sync + 'static,
-    >(
-        &self,
-        path: S,
-        walker_fn: Option<F>,
-    ) -> Result<Self::ListIter, FsError> {
+    async fn list(
+        &'a self,
+        path: &'a str,
+        walker_fn: Option<Walker>,
+    ) -> Result<EntryIter, FsError> {
+        let p = path.to_string();
         if let Some(walker) = walker_fn {
-            let entries = tokio::task::spawn_blocking(move || walker(path))
+            let entries = tokio::task::spawn_blocking(move || walker(&p))
                 .await
                 .map_err(|e| FsError::List(e.to_string()))??;
 
@@ -129,6 +116,12 @@ impl Fs for DiskFs {
 #[derive(Debug, Clone)]
 pub struct ObjectStoreFs {
     pub object_store: Arc<dyn ObjectStore>,
+}
+
+impl ObjectStoreFs {
+    pub fn new(object_store: Arc<dyn ObjectStore>) -> Self {
+        Self { object_store }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +146,12 @@ pub struct ObjectStoreIterator {
     inner: std::sync::mpsc::IntoIter<ObjectStoreEntry>,
 }
 
+impl ObjectStoreIterator {
+    pub fn into_entry_iter(self) -> EntryIter {
+        Box::new(self.map(|e| Box::new(e) as Box<dyn DirEntry>))
+    }
+}
+
 impl Iterator for ObjectStoreIterator {
     type Item = ObjectStoreEntry;
 
@@ -162,11 +161,8 @@ impl Iterator for ObjectStoreIterator {
 }
 
 #[async_trait::async_trait]
-impl Fs for ObjectStoreFs {
-    type Entry = ObjectStoreEntry;
-    type ListIter = ObjectStoreIterator;
-
-    async fn read<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<Vec<u8>, FsError> {
+impl<'a> Fs<'a> for ObjectStoreFs {
+    async fn read(&'a self, path: &'a str) -> Result<Vec<u8>, FsError> {
         let response = self
             .object_store
             .get(
@@ -185,16 +181,12 @@ impl Fs for ObjectStoreFs {
         Ok(v)
     }
 
-    async fn write<S: AsRef<str> + Send + Sync, D: AsRef<[u8]> + Sync + Send + 'static>(
-        &self,
-        path: S,
-        data: D,
-    ) -> Result<(), FsError> {
+    async fn write(&'a self, path: &'a str, data: &'a [u8]) -> Result<(), FsError> {
         self.object_store
             .put(
                 &ObjPath::from_url_path(path)
                     .map_err(|e| FsError::Write(format!("Invalid object path: {}", e)))?,
-                PutPayload::from_iter(data.as_ref().iter().copied()),
+                PutPayload::from_iter(data.iter().copied()),
             )
             .await
             .map_err(|e| FsError::Write(format!("Write operation failed: {}", e)))?;
@@ -202,7 +194,7 @@ impl Fs for ObjectStoreFs {
         Ok(())
     }
 
-    async fn delete<S: AsRef<str> + Send + Sync>(&self, path: S) -> Result<(), FsError> {
+    async fn delete(&'a self, path: &'a str) -> Result<(), FsError> {
         self.object_store
             .delete(
                 &ObjPath::from_url_path(path)
@@ -214,18 +206,15 @@ impl Fs for ObjectStoreFs {
     }
 
     // no-op, object stores can't create directories
-    async fn create_dir<S: AsRef<str> + Send + Sync>(&self, _path: S) -> Result<(), FsError> {
+    async fn create_dir(&'a self, _path: &'a str) -> Result<(), FsError> {
         Ok(())
     }
 
-    async fn list<
-        S: AsRef<str> + Send + Sync + 'static,
-        F: Fn(S) -> Result<Self::ListIter, FsError> + Send + Sync + 'static,
-    >(
-        &self,
-        path: S,
-        walker_fn: Option<F>,
-    ) -> Result<Self::ListIter, FsError> {
+    async fn list(
+        &'a self,
+        path: &'a str,
+        walker_fn: Option<Walker>,
+    ) -> Result<EntryIter, FsError> {
         if walker_fn.is_some() {
             return Err(FsError::List(
                 "ObjectStore does not support custom walker functions".into(),
@@ -257,6 +246,7 @@ impl Fs for ObjectStoreFs {
 
         Ok(ObjectStoreIterator {
             inner: rx.into_iter(),
-        })
+        }
+        .into_entry_iter())
     }
 }

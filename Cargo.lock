@@ -3458,6 +3458,8 @@ dependencies = [
 name = "ver-kv"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "bytes",
  "redb",
  "redis",
 ]
@@ -3488,6 +3490,8 @@ dependencies = [
  "tempdir",
  "tokio",
  "ver-blobsdb",
+ "ver-fs",
+ "ver-kv",
 ]
 
 [[package]]

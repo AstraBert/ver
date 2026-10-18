@@ -6,6 +6,8 @@ use redb::{
     CommitError, DatabaseError, Error as RedbError, StorageError, TableError, TransactionError,
 };
 use std::{error::Error, fmt::Display, io, string::FromUtf8Error};
+use ver_fs::errors::FsError;
+use ver_kv::{RedisError, errors::KVError};
 
 /// Internal error that abstracts errors from other
 /// crates
@@ -198,6 +200,30 @@ impl From<minus::MinusError> for VerError {
     fn from(value: minus::MinusError) -> Self {
         Self {
             message: format!("Error while displaying the snapshot history: {}", value),
+        }
+    }
+}
+
+impl From<RedisError> for VerError {
+    fn from(value: RedisError) -> Self {
+        Self {
+            message: format!("Redis error: {}", value),
+        }
+    }
+}
+
+impl From<FsError> for VerError {
+    fn from(value: FsError) -> Self {
+        Self {
+            message: format!("FS error: {}", value),
+        }
+    }
+}
+
+impl From<KVError> for VerError {
+    fn from(value: KVError) -> Self {
+        Self {
+            message: format!("KV error: {}", value),
         }
     }
 }

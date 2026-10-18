@@ -32,6 +32,8 @@ pretty-hex = { version = "0.4.2", optional = true }
 tokio = { workspace = true }
 futures-util = { workspace = true }
 age = { version = "0.12.1", features = ["armor"] }
+ver-fs = { version = "0.1", path = "../fs" }
+ver-kv = { version = "0.1", path = "../kv" }
 
 [features]
 default = ["minus"]

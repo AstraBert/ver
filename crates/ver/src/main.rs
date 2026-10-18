@@ -122,32 +122,12 @@ enum FsBackendCommands {
 
 #[derive(Debug, Subcommand)]
 enum CtxCommands {
-    /// Add or update a filesystem backend
-    /// in the specified context
-    Fs {
-        context: String,
-        /// Whether to update the filesystem
-        /// backend instead of adding it
-        #[arg(long, short, default_value_t = false)]
-        update: bool,
-        #[command(subcommand)]
-        /// Choose the backend for the filesystem you are adding
-        /// to the specified context
-        backend: FsBackendCommands,
-    },
-    /// Add or update a key-value store backend
-    /// in the specified context
-    Kv {
-        context: String,
-        /// Whether to update the key-value store
-        /// backend instead of adding it
-        #[arg(long, short, default_value_t = false)]
-        update: bool,
-        #[command(subcommand)]
-        /// Choose the backend for the key-value store you are adding
-        /// to the specified context
-        backend: KvBackendCommands,
-    },
+    /// List all contexts
+    List,
+    /// Get current context
+    Get,
+    /// Describe a context (filesystem and KV backend)
+    Describe { context: String },
     /// Switch to the specified context
     Switch { context: String },
     /// Delete the specified context
@@ -582,6 +562,33 @@ enum Commands {
         #[command(subcommand)]
         ctx_cmd: CtxCommands,
     },
+
+    /// Add or update a filesystem backend
+    /// in the specified context
+    Fs {
+        context: String,
+        /// Whether to update the filesystem
+        /// backend instead of adding it
+        #[arg(long, short, default_value_t = false)]
+        update: bool,
+        #[command(subcommand)]
+        /// Choose the backend for the filesystem you are adding
+        /// to the specified context
+        backend: FsBackendCommands,
+    },
+    /// Add or update a key-value store backend
+    /// in the specified context
+    Kv {
+        context: String,
+        /// Whether to update the key-value store
+        /// backend instead of adding it
+        #[arg(long, short, default_value_t = false)]
+        update: bool,
+        #[command(subcommand)]
+        /// Choose the backend for the key-value store you are adding
+        /// to the specified context
+        backend: KvBackendCommands,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -609,100 +616,117 @@ fn main() -> Result<(), VerError> {
                 fs::write(path, &s)?;
                 Ok(())
             }
-            CtxCommands::Fs {
-                context,
-                backend,
-                update,
-            } => {
-                let be = match backend {
-                    FsBackendCommands::Azure {
-                        account_name,
-                        account_key,
-                        endpoint,
-                        container,
-                        key_file,
-                    } => {
-                        let acc = resolve_maybe_secret(&account_name, key_file.as_deref())?;
-                        let key = resolve_maybe_secret(&account_key, key_file.as_deref())?;
-                        let end = resolve_maybe_secret(&endpoint, key_file.as_deref())?;
-                        let cont = resolve_maybe_secret(&container, key_file.as_deref())?;
-                        VerFsBackend::Azure {
-                            account_name: acc,
-                            account_key: key,
-                            endpoint: end,
-                            container_name: cont,
-                        }
-                    }
-                    FsBackendCommands::GCS {
-                        service_account_credentials_path,
-                        bucket,
-                    } => VerFsBackend::Gcs {
-                        service_account_credentials_path,
-                        bucket,
-                    },
-                    FsBackendCommands::Local { dir } => VerFsBackend::Local {
-                        base_dir: PathBuf::from(dir)
-                            .canonicalize()?
-                            .to_string_lossy()
-                            .to_string(),
-                    },
-                    FsBackendCommands::S3 {
-                        access_key_id,
-                        secret_access_key,
-                        region,
-                        endpoint,
-                        bucket,
-                        key_file,
-                    } => {
-                        let acc = resolve_maybe_secret(&access_key_id, key_file.as_deref())?;
-                        let key = resolve_maybe_secret(&secret_access_key, key_file.as_deref())?;
-                        let reg = resolve_maybe_secret(&region, key_file.as_deref())?;
-                        let end = resolve_maybe_secret(&endpoint, key_file.as_deref())?;
-                        let buck = resolve_maybe_secret(&bucket, key_file.as_deref())?;
-                        VerFsBackend::S3 {
-                            access_key_id: acc,
-                            secret_access_key: key,
-                            region: reg,
-                            endpoint: end,
-                            bucket: buck,
-                        }
-                    }
-                };
-                let (mut cur, path) = VerContext::from_file()?;
-                if update {
-                    cur.update_fs(context, be)?;
-                } else {
-                    cur.add_fs(context, be)?;
-                }
-                let s = serde_json::to_string_pretty(&cur)?;
-                fs::write(path, &s)?;
+            CtxCommands::Describe { context } => {
+                let (cur, _) = VerContext::from_file()?;
+                let des = cur.describe_ctx(&context)?;
+                println!("{}", des);
                 Ok(())
             }
-            CtxCommands::Kv {
-                context,
-                update,
-                backend,
-            } => {
-                let be = match backend {
-                    KvBackendCommands::Embedded => VerKVBackend::Embedded,
-                    KvBackendCommands::Redis { uri, key_file } => {
-                        let conn_str = resolve_maybe_secret(&uri, key_file.as_deref())?;
-                        VerKVBackend::Redis {
-                            connection_string: conn_str,
-                        }
-                    }
-                };
-                let (mut cur, path) = VerContext::from_file()?;
-                if update {
-                    cur.update_kv(context, be)?;
-                } else {
-                    cur.add_kv(context, be)?;
-                }
-                let s = serde_json::to_string_pretty(&cur)?;
-                fs::write(path, &s)?;
+            CtxCommands::Get => {
+                let (cur, _) = VerContext::from_file()?;
+                println!("{}", cur.current);
+                Ok(())
+            }
+            CtxCommands::List => {
+                let (cur, _) = VerContext::from_file()?;
+                let ls = cur.list_ctx();
+                println!("{}", ls.join(", "));
                 Ok(())
             }
         },
+        Commands::Fs {
+            context,
+            backend,
+            update,
+        } => {
+            let be = match backend {
+                FsBackendCommands::Azure {
+                    account_name,
+                    account_key,
+                    endpoint,
+                    container,
+                    key_file,
+                } => {
+                    let acc = resolve_maybe_secret(&account_name, key_file.as_deref())?;
+                    let key = resolve_maybe_secret(&account_key, key_file.as_deref())?;
+                    let end = resolve_maybe_secret(&endpoint, key_file.as_deref())?;
+                    let cont = resolve_maybe_secret(&container, key_file.as_deref())?;
+                    VerFsBackend::Azure {
+                        account_name: acc,
+                        account_key: key,
+                        endpoint: end,
+                        container_name: cont,
+                    }
+                }
+                FsBackendCommands::GCS {
+                    service_account_credentials_path,
+                    bucket,
+                } => VerFsBackend::Gcs {
+                    service_account_credentials_path,
+                    bucket,
+                },
+                FsBackendCommands::Local { dir } => VerFsBackend::Local {
+                    base_dir: PathBuf::from(dir)
+                        .canonicalize()?
+                        .to_string_lossy()
+                        .to_string(),
+                },
+                FsBackendCommands::S3 {
+                    access_key_id,
+                    secret_access_key,
+                    region,
+                    endpoint,
+                    bucket,
+                    key_file,
+                } => {
+                    let acc = resolve_maybe_secret(&access_key_id, key_file.as_deref())?;
+                    let key = resolve_maybe_secret(&secret_access_key, key_file.as_deref())?;
+                    let reg = resolve_maybe_secret(&region, key_file.as_deref())?;
+                    let end = resolve_maybe_secret(&endpoint, key_file.as_deref())?;
+                    let buck = resolve_maybe_secret(&bucket, key_file.as_deref())?;
+                    VerFsBackend::S3 {
+                        access_key_id: acc,
+                        secret_access_key: key,
+                        region: reg,
+                        endpoint: end,
+                        bucket: buck,
+                    }
+                }
+            };
+            let (mut cur, path) = VerContext::from_file()?;
+            if update {
+                cur.update_fs(context, be)?;
+            } else {
+                cur.add_fs(context, be)?;
+            }
+            let s = serde_json::to_string_pretty(&cur)?;
+            fs::write(path, &s)?;
+            Ok(())
+        }
+        Commands::Kv {
+            context,
+            update,
+            backend,
+        } => {
+            let be = match backend {
+                KvBackendCommands::Embedded => VerKVBackend::Embedded,
+                KvBackendCommands::Redis { uri, key_file } => {
+                    let conn_str = resolve_maybe_secret(&uri, key_file.as_deref())?;
+                    VerKVBackend::Redis {
+                        connection_string: conn_str,
+                    }
+                }
+            };
+            let (mut cur, path) = VerContext::from_file()?;
+            if update {
+                cur.update_kv(context, be)?;
+            } else {
+                cur.add_kv(context, be)?;
+            }
+            let s = serde_json::to_string_pretty(&cur)?;
+            fs::write(path, &s)?;
+            Ok(())
+        }
         Commands::Snap { name, description } => {
             let stdout = io::stdout();
             let mut handle = stdout.lock();

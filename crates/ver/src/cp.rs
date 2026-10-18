@@ -11,12 +11,14 @@ use std::{
     sync::{Arc, mpsc},
 };
 use tokio::sync::Semaphore;
+use ver_kv::{KVStore, RedbStore, RedisStore};
 
 use crate::{
     commons::resolve_ver_dir_path,
+    context::{VerContext, VerFsBackend, VerKVBackend, build_fs},
     errors::VerError,
     files::{MAX_INFLIGHT_READS, SNAPSHOT_TABLE, Snapshot, panic_msg, rt},
-    init::{REDB_PATH, init_blobs_db},
+    init::{REDB_PATH, VER_DIRECTORY, init_blobs_db},
     named::get_snapshot_by_name,
 };
 
@@ -25,11 +27,32 @@ pub fn copy<O: io::Write>(
     destination: &str,
     std_out: &mut O,
 ) -> Result<(), VerError> {
-    let dest_path = Path::new(destination);
+    let (ctx, _) = VerContext::from_file()?;
+    let (back_fs_cur, back_kv_cur) = ctx.get_backends(None)?;
+    let (back_fs_dest, back_kv_dest) = ctx.get_backends(Some(destination))?;
 
-    if !dest_path.is_dir() {
-        fs::create_dir_all(dest_path)?;
-    }
+    let fs_cur = build_fs(&back_fs_cur)?;
+    let fs_dest = build_fs(&back_fs_dest)?;
+    let kv_cur: Arc<dyn KVStore> = match back_kv_cur {
+        VerKVBackend::Embedded => {
+            let VerFsBackend::Local { base_dir } = &back_fs_cur else {
+                return Err("Expecting local filesystem with an embedded KV".into());
+            };
+            let redb = Database::open(PathBuf::from(base_dir).join(VER_DIRECTORY).join(REDB_PATH))?;
+            Arc::new(RedbStore::new(&redb))
+        }
+        VerKVBackend::Redis { connection_string } => Arc::new(RedisStore::new(connection_string)?),
+    };
+    let kv_dest: Arc<dyn KVStore> = match back_kv_dest {
+        VerKVBackend::Embedded => {
+            let VerFsBackend::Local { base_dir } = &back_fs_dest else {
+                return Err("Expecting local filesystem with an embedded KV".into());
+            };
+            let redb = Database::open(PathBuf::from(base_dir).join(VER_DIRECTORY).join(REDB_PATH))?;
+            Arc::new(RedbStore::new(&redb))
+        }
+        VerKVBackend::Redis { connection_string } => Arc::new(RedisStore::new(connection_string)?),
+    };
 
     // open databases
     let current_dir = env::current_dir()?;
@@ -41,15 +64,13 @@ pub fn copy<O: io::Write>(
 
     let hash = match maybe_hash {
         Ok(h) => h.as_bytes().to_owned(),
-        Err(_) => get_snapshot_by_name(&redb, snapshot_id)?,
+        Err(_) => get_snapshot_by_name(&kv_cur, snapshot_id)?,
     };
 
-    let trx = redb.begin_read()?;
-    let table = trx.open_table(SNAPSHOT_TABLE)?;
-    let maybe_entry = table.get(hash)?;
+    let maybe_entry = kv_cur.get_snapshot(hash)?;
 
     if let Some(entry) = maybe_entry {
-        let decompressed: Snapshot = postcard::from_bytes(entry.value())?;
+        let decompressed: Snapshot = postcard::from_bytes(entry.iter().as_slice())?;
         let mut copied = decompressed.repository_state.len();
         let state = decompressed
             .repository_state

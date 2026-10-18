@@ -1,8 +1,15 @@
-use std::{collections::HashMap, env, fs, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    env, fs,
+    path::PathBuf,
+    sync::Arc,
+};
 
+use blobsdb::get_object_store;
 use serde::{Deserialize, Serialize};
+use ver_fs::{DiskFs, Fs, ObjectStoreFs};
 
-use crate::{commons::resolve_ver_dir_path, errors::VerError, init::VER_CONTEXT};
+use crate::{commons::global_context, errors::VerError};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -45,6 +52,12 @@ enum ContextAction<'a> {
     RemoveCtx(&'a str),
 }
 
+#[derive(Debug, Serialize)]
+struct CtxDescription<'a> {
+    fs: &'a VerFsBackend,
+    kv: &'a VerKVBackend,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VerContext {
     pub fs: HashMap<String, VerFsBackend>,
@@ -76,11 +89,47 @@ impl VerContext {
     }
 
     pub fn from_file() -> Result<(Self, PathBuf), VerError> {
-        let resolved = resolve_ver_dir_path(env::current_dir()?)?;
-        let s = fs::read_to_string(resolved.join(VER_CONTEXT))?;
+        let resolved = global_context()?;
+        if !resolved.exists() {
+            return Ok((Self::new(), resolved));
+        }
+        let s = fs::read_to_string(&resolved)?;
         let new: Self = serde_json::from_str(&s)?;
         new.validate_default()?;
-        Ok((new, resolved.join(VER_CONTEXT)))
+        Ok((new, resolved))
+    }
+
+    pub fn list_ctx(&self) -> Vec<String> {
+        let fs_keys: HashSet<&str> = self.fs.keys().map(|s| s.as_str()).collect();
+        let kv_keys: HashSet<&str> = self.kv.keys().map(|s| s.as_str()).collect();
+        let intersection: Vec<String> = fs_keys
+            .intersection(&kv_keys)
+            .map(|s| s.to_string())
+            .collect();
+        intersection
+    }
+
+    pub fn describe_ctx(&self, context_name: &str) -> Result<String, VerError> {
+        self.validate_action(ContextAction::SwitchCtx(context_name))?;
+        let fs = self.fs.get(context_name).unwrap();
+        let kv = self.kv.get(context_name).unwrap();
+        let des = serde_json::to_string_pretty(&CtxDescription { kv, fs })?;
+        Ok(des)
+    }
+
+    pub fn get_backends(
+        &self,
+        context_name: Option<&str>,
+    ) -> Result<(VerFsBackend, VerKVBackend), VerError> {
+        if let Some(ctx) = context_name {
+            self.validate_action(ContextAction::SwitchCtx(ctx))?;
+            let fs = self.fs.get(ctx).unwrap();
+            let kv = self.kv.get(ctx).unwrap();
+            return Ok((fs.clone(), kv.clone()));
+        }
+        let fs = self.fs.get(&self.current).unwrap();
+        let kv = self.kv.get(&self.current).unwrap();
+        Ok((fs.clone(), kv.clone()))
     }
 
     pub fn add_fs(&mut self, context_name: String, backend: VerFsBackend) -> Result<(), VerError> {
@@ -99,6 +148,9 @@ impl VerContext {
         self.validate_action(ContextAction::RemoveCtx(context_name))?;
         self.kv.remove(context_name);
         self.fs.remove(context_name);
+        if self.current == context_name {
+            self.current = "default".into();
+        }
         Ok(())
     }
 
@@ -192,4 +244,51 @@ impl VerContext {
         }
         Ok(())
     }
+}
+
+pub fn build_fs(backend: &VerFsBackend) -> Result<Arc<dyn Fs>, VerError> {
+    let fs: Arc<dyn Fs> = match backend {
+        VerFsBackend::Azure {
+            account_name,
+            account_key,
+            endpoint,
+            container_name,
+        } => {
+            let object_store = get_object_store(blobsdb::GetObjectStoreInput::Azure {
+                account_name: Some(account_name.to_owned()),
+                account_key: Some(account_key.to_owned()),
+                endpoint: Some(endpoint.to_owned()),
+                container_name: container_name.to_owned(),
+            })?;
+            Arc::new(ObjectStoreFs::new(object_store))
+        }
+        VerFsBackend::Gcs {
+            service_account_credentials_path,
+            bucket,
+        } => {
+            let object_store = get_object_store(blobsdb::GetObjectStoreInput::Gcs {
+                service_account_credentials_path: service_account_credentials_path.to_owned(),
+                bucket: bucket.to_owned(),
+            })?;
+            Arc::new(ObjectStoreFs::new(object_store))
+        }
+        VerFsBackend::S3 {
+            access_key_id,
+            secret_access_key,
+            region,
+            endpoint,
+            bucket,
+        } => {
+            let object_store = get_object_store(blobsdb::GetObjectStoreInput::S3 {
+                access_key_id: Some(access_key_id.to_owned()),
+                secret_access_key: Some(secret_access_key.to_owned()),
+                region: Some(region.to_owned()),
+                endpoint: Some(endpoint.to_owned()),
+                bucket: bucket.to_owned(),
+            })?;
+            Arc::new(ObjectStoreFs::new(object_store))
+        }
+        VerFsBackend::Local { base_dir } => Arc::new(DiskFs::new(base_dir)),
+    };
+    Ok(fs)
 }
