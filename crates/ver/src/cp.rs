@@ -11,13 +11,14 @@ use std::{
     sync::{Arc, mpsc},
 };
 use tokio::sync::Semaphore;
+use ver_fs::errors::FsError;
 use ver_kv::{KVStore, RedbStore, RedisStore};
 
 use crate::{
     commons::resolve_ver_dir_path,
     context::{VerContext, VerFsBackend, VerKVBackend, build_fs},
     errors::VerError,
-    files::{MAX_INFLIGHT_READS, SNAPSHOT_TABLE, Snapshot, panic_msg, rt},
+    files::{MAX_INFLIGHT_READS, MAX_INFLIGHT_WRITES, SNAPSHOT_TABLE, Snapshot, panic_msg, rt},
     init::{REDB_PATH, VER_DIRECTORY, init_blobs_db},
     named::get_snapshot_by_name,
 };
@@ -55,10 +56,7 @@ pub fn copy<O: io::Write>(
     };
 
     // open databases
-    let current_dir = env::current_dir()?;
-    let resolved = resolve_ver_dir_path(current_dir)?;
-    let redb = Database::open(resolved.join(REDB_PATH))?;
-    let blobdb = Arc::new(init_blobs_db(&resolved)?);
+    let blobdb = Arc::new(init_blobs_db(&Path::new("something"))?);
 
     let maybe_hash = blake3::Hash::from_str(snapshot_id);
 
@@ -78,7 +76,7 @@ pub fn copy<O: io::Write>(
             .map(|(k, v)| (k, Arc::new(v)))
             .collect::<HashMap<String, Arc<Vec<Chunk>>>>();
         let sem = Arc::new(Semaphore::new(MAX_INFLIGHT_READS));
-        let (tx, rx) = mpsc::channel::<(PathBuf, Result<Vec<u8>, String>)>();
+        let (tx, rx) = mpsc::channel::<(&Path, Result<Vec<u8>, String>)>();
 
         for (k, v) in state {
             let relative = Path::new(&k);
@@ -87,13 +85,10 @@ pub fn copy<O: io::Write>(
             if let Some(parent) = par
                 && !parent.is_empty()
             {
-                let full_dir = dest_path.join(parent);
-                if !full_dir.is_dir() {
-                    fs::create_dir_all(full_dir)?;
+                if rt().block_on(fs_dest.exists(&parent.to_string_lossy()))? {
+                    rt().block_on(fs_dest.create_dir(&parent.to_string_lossy()))?;
                 }
             }
-
-            let full_fl = dest_path.join(relative);
 
             let tx = tx.clone();
             // Blocks the calling (sync) thread until a slot is free
@@ -111,23 +106,47 @@ pub fn copy<O: io::Write>(
                     Ok(r) => r,
                     Err(payload) => Err(panic_msg(payload)),
                 };
-                let _ = tx.send((full_fl, res));
+                let _ = tx.send((relative, res));
             });
         }
 
         drop(tx);
 
+        let (txw, rxw) = mpsc::channel::<Result<(), String>>();
+        let semw = Arc::new(Semaphore::new(MAX_INFLIGHT_WRITES));
+
         for (fl, res) in rx {
             if res.is_err() {
                 return Err(res.unwrap_err().into());
             }
-            fs::write(fl, res.unwrap())?;
+            let permitw = rt()
+                .block_on(Arc::clone(&semw).acquire_owned())
+                .expect("semaphore closed");
+            rt().spawn(async move {
+                let _permit = permitw; // moved in, released when the task ends
+                let res = match AssertUnwindSafe(async move {
+                    fs_dest
+                        .write(&fl.to_string_lossy(), res.unwrap().as_slice())
+                        .await
+                })
+                .catch_unwind()
+                .await
+                {
+                    Ok(r) => r.map_err(|e| e.to_string()),
+                    Err(payload) => Err(panic_msg(payload)),
+                };
+                let _ = txw.send(res);
+            });
         }
 
-        // Close the databases before copying to avoid file locking issues on Windows
-        drop(table);
-        drop(trx);
-        drop(redb);
+        drop(txw);
+
+        for r in rxw {
+            if r.is_err() {
+                return Err(r.unwrap_err().into());
+            }
+        }
+
         drop(blobdb);
 
         copy_dir(resolved, dest_path, &CopyOptions::new())?;

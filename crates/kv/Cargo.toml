@@ -6,5 +6,5 @@ edition = "2024"
 [dependencies]
 redis = { workspace = true }
 redb = { workspace = true }
-bytes = "1.12.1"
+bytes = { workspace = true }
 blake3 = { workspace = true }

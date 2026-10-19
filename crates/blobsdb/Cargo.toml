@@ -1,6 +1,6 @@
 [package]
 name = "ver-blobsdb"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 readme = "README.md"
 description = "Content-addressed blob storage for ver"
@@ -20,6 +20,8 @@ tokio-util = { version = "0.7", features = ["io"] }
 postcard = { workspace = true }
 serde = { workspace = true }
 async-compression = { version = "0.4.50", features = ["tokio", "zstd"] }
+ver-fs = { path = "../fs", version = "0.1" }
+bytes = { workspace = true }
 
 [dev-dependencies]
 tempdir = "0.3.7"

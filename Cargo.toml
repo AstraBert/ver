@@ -13,3 +13,4 @@ ignore = "0.4.25"
 object_store = { version = "0.14", features = ["aws", "gcp", "azure"] }
 futures-util = "0.3.34"
 redis = { version = "1.7", features = ["tls-rustls"] }
+bytes = "1.12.1"

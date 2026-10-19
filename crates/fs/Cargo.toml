@@ -9,3 +9,4 @@ tokio = { workspace = true, features = ["fs", "tokio-macros"] }
 ignore = { workspace = true }
 object_store = { workspace = true }
 futures-util = { workspace = true }
+bytes = { workspace = true }

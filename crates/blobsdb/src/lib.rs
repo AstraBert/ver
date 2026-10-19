@@ -9,6 +9,7 @@ use std::{
 };
 
 use async_compression::tokio::{bufread::ZstdDecoder, write::ZstdEncoder};
+use bytes::Bytes;
 use fastcdc::v2020::*;
 use object_store::{BackoffConfig, RetryConfig, memory::InMemory};
 pub use object_store::{
@@ -23,6 +24,7 @@ use tokio::{
     task::JoinSet,
 };
 use tokio_stream::StreamExt;
+use ver_fs::Fs;
 
 pub const MIN_CHUNK_SIZE: usize = 64 * 1024; // 64 KB
 pub const AVG_CHUNK_SIZE: usize = 256 * 1024; // 256 KB
@@ -763,5 +765,57 @@ impl BlobsDB {
         self.dump_synced_map(&owned).await?;
 
         Ok(())
+    }
+}
+
+async fn write_chunk_with_fs<'a, R: AsyncRead + Unpin>(
+    fs: &'a Arc<dyn Fs<'a>>,
+    mut source: R,
+    destination: &'a str,
+) -> Result<(), String> {
+    // Use fastest compression level for better write performance
+    let mut enc = ZstdEncoder::with_quality(Vec::new(), async_compression::Level::Fastest);
+    io::copy(&mut source, &mut enc)
+        .await
+        .map_err(|e| format!("Error while encoding chunk content: {e}"))?;
+    enc.shutdown()
+        .await
+        .map_err(|e| format!("Error while writing the encoded content: {e}"))?;
+    let compressed: Vec<u8> = enc.into_inner();
+    fs.write(destination, compressed.into())
+        .await
+        .map_err(|e| format!("Error while storing encoded content: {e}"))?;
+
+    Ok(())
+}
+
+async fn read_chunk_with_fs<'a>(
+    fs: &'a Arc<dyn Fs<'a>>,
+    path: &'a str,
+    offset: u64,
+) -> Result<(Vec<u8>, u64), String> {
+    // Stream the response directly into decompressor
+    let bts = fs
+        .read(path)
+        .await
+        .map_err(|e| format!("Error while fetching the chunk content: {e}"))?;
+
+    let mut decoder = ZstdDecoder::new(BufReader::new(bts.iter().as_slice()));
+    let mut content = Vec::with_capacity(MAX_CHUNK_SIZE);
+
+    io::copy(&mut decoder, &mut content)
+        .await
+        .map_err(|e| format!("Error while decoding chunk: {e}"))?;
+
+    Ok((content, offset))
+}
+
+pub struct BlobsDBWithFs<'a> {
+    pub fs: Arc<dyn Fs<'a>>,
+}
+
+impl<'a> BlobsDBWithFs<'a> {
+    pub fn new(fs: Arc<dyn Fs<'a>>) -> Self {
+        Self { fs }
     }
 }
