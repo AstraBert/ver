@@ -20,14 +20,13 @@ pub type EntryIter = Box<dyn Iterator<Item = Box<dyn DirEntry>> + Send>;
 pub type Walker = Box<dyn Fn(&PathBuf) -> Result<EntryIter, FsError> + Send + Sync>;
 
 #[async_trait::async_trait]
-pub trait Fs<'a> {
-    async fn read(&'a self, path: &'a str) -> Result<Bytes, FsError>;
-    async fn write(&'a self, path: &'a str, data: Bytes) -> Result<(), FsError>;
-    async fn delete(&'a self, path: &'a str) -> Result<(), FsError>;
-    async fn list(&'a self, path: &'a str, walker_fn: Option<Walker>)
-    -> Result<EntryIter, FsError>;
-    async fn create_dir(&'a self, path: &'a str) -> Result<(), FsError>;
-    async fn exists(&'a self, path: &'a str) -> Result<bool, FsError>;
+pub trait Fs: Send + Sync {
+    async fn read(&self, path: &str) -> Result<Bytes, FsError>;
+    async fn write(&self, path: &str, data: Bytes) -> Result<(), FsError>;
+    async fn delete(&self, path: &str) -> Result<(), FsError>;
+    async fn list(&self, path: &str, walker_fn: Option<Walker>) -> Result<EntryIter, FsError>;
+    async fn create_dir(&self, path: &str) -> Result<(), FsError>;
+    async fn exists(&self, path: &str) -> Result<bool, FsError>;
 }
 
 impl DirEntry for ignore::DirEntry {
@@ -80,8 +79,8 @@ impl DiskFs {
 }
 
 #[async_trait::async_trait]
-impl<'a> Fs<'a> for DiskFs {
-    async fn read(&'a self, path: &'a str) -> Result<Bytes, FsError> {
+impl Fs for DiskFs {
+    async fn read(&self, path: &str) -> Result<Bytes, FsError> {
         let res = fs::read(self.prefix_path(path))
             .await
             .map_err(|e| FsError::Read(e.to_string()))?;
@@ -89,29 +88,25 @@ impl<'a> Fs<'a> for DiskFs {
         Ok(Bytes::from(res))
     }
 
-    async fn write(&'a self, path: &'a str, data: Bytes) -> Result<(), FsError> {
+    async fn write(&self, path: &str, data: Bytes) -> Result<(), FsError> {
         fs::write(self.prefix_path(path), data)
             .await
             .map_err(|e| FsError::Write(e.to_string()))
     }
 
-    async fn delete(&'a self, path: &'a str) -> Result<(), FsError> {
+    async fn delete(&self, path: &str) -> Result<(), FsError> {
         fs::remove_file(self.prefix_path(path))
             .await
             .map_err(|e| FsError::Delete(e.to_string()))
     }
 
-    async fn create_dir(&'a self, path: &'a str) -> Result<(), FsError> {
+    async fn create_dir(&self, path: &str) -> Result<(), FsError> {
         fs::create_dir_all(self.prefix_path(path))
             .await
             .map_err(|e| FsError::CreateDir(e.to_string()))
     }
 
-    async fn list(
-        &'a self,
-        path: &'a str,
-        walker_fn: Option<Walker>,
-    ) -> Result<EntryIter, FsError> {
+    async fn list(&self, path: &str, walker_fn: Option<Walker>) -> Result<EntryIter, FsError> {
         let p = self.prefix_path(path);
         if let Some(walker) = walker_fn {
             let entries = tokio::task::spawn_blocking(move || walker(&p))
@@ -125,7 +120,7 @@ impl<'a> Fs<'a> for DiskFs {
         ))
     }
 
-    async fn exists(&'a self, path: &'a str) -> Result<bool, FsError> {
+    async fn exists(&self, path: &str) -> Result<bool, FsError> {
         let p = self.prefix_path(path);
         fs::try_exists(p)
             .await
@@ -181,8 +176,8 @@ impl Iterator for ObjectStoreIterator {
 }
 
 #[async_trait::async_trait]
-impl<'a> Fs<'a> for ObjectStoreFs {
-    async fn read(&'a self, path: &'a str) -> Result<Bytes, FsError> {
+impl Fs for ObjectStoreFs {
+    async fn read(&self, path: &str) -> Result<Bytes, FsError> {
         let response = self
             .object_store
             .get(
@@ -201,7 +196,7 @@ impl<'a> Fs<'a> for ObjectStoreFs {
         Ok(Bytes::from(v))
     }
 
-    async fn write(&'a self, path: &'a str, data: Bytes) -> Result<(), FsError> {
+    async fn write(&self, path: &str, data: Bytes) -> Result<(), FsError> {
         self.object_store
             .put(
                 &ObjPath::from_url_path(path)
@@ -214,7 +209,7 @@ impl<'a> Fs<'a> for ObjectStoreFs {
         Ok(())
     }
 
-    async fn delete(&'a self, path: &'a str) -> Result<(), FsError> {
+    async fn delete(&self, path: &str) -> Result<(), FsError> {
         self.object_store
             .delete(
                 &ObjPath::from_url_path(path)
@@ -226,15 +221,11 @@ impl<'a> Fs<'a> for ObjectStoreFs {
     }
 
     // no-op, object stores can't create directories
-    async fn create_dir(&'a self, _path: &'a str) -> Result<(), FsError> {
+    async fn create_dir(&self, _path: &str) -> Result<(), FsError> {
         Ok(())
     }
 
-    async fn list(
-        &'a self,
-        path: &'a str,
-        walker_fn: Option<Walker>,
-    ) -> Result<EntryIter, FsError> {
+    async fn list(&self, path: &str, walker_fn: Option<Walker>) -> Result<EntryIter, FsError> {
         if walker_fn.is_some() {
             return Err(FsError::List(
                 "ObjectStore does not support custom walker functions".into(),
@@ -271,7 +262,7 @@ impl<'a> Fs<'a> for ObjectStoreFs {
     }
 
     // Object storage path should always be relative
-    async fn exists(&'a self, path: &'a str) -> Result<bool, FsError> {
+    async fn exists(&self, path: &str) -> Result<bool, FsError> {
         let res = self
             .object_store
             .head(

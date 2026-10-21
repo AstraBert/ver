@@ -4,3 +4,4 @@ target/
 compose.yaml
 .versecrets.json
 scripts/
+.archived/
