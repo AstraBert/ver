@@ -1,0 +1,13 @@
+[package]
+name = "ver-fs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-trait = "0.1.92"
+tokio = { workspace = true, features = ["fs", "tokio-macros"] }
+ignore = { workspace = true }
+object_store = { workspace = true }
+futures-util = { workspace = true }
+bytes = { workspace = true }
+tokio-util = "0.7.20"

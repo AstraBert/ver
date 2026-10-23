@@ -1,0 +1,10 @@
+[package]
+name = "ver-kv"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+redis = { workspace = true }
+redb = { workspace = true }
+bytes = { workspace = true }
+blake3 = { workspace = true }
