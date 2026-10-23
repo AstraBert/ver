@@ -232,15 +232,12 @@ impl BlobsDBWithFs {
         Self { fs }
     }
 
-    pub async fn put<D: AsRef<[u8]>>(&self, content: D) -> Result<Vec<Chunk>, String> {
+    pub async fn put(&self, path: &str) -> Result<Vec<Chunk>, String> {
+        let stream = self.fs.stream_read(path).await.map_err(|e| e.to_string())?;
         let mut chunks: Vec<Chunk> = vec![];
 
-        let mut chunker = AsyncStreamCDC::new(
-            content.as_ref(),
-            MIN_CHUNK_SIZE,
-            AVG_CHUNK_SIZE,
-            MAX_CHUNK_SIZE,
-        );
+        let mut chunker =
+            AsyncStreamCDC::new(stream, MIN_CHUNK_SIZE, AVG_CHUNK_SIZE, MAX_CHUNK_SIZE);
         let mut stream = Box::pin(chunker.as_stream());
         let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_OPS));
         let mut join_set = JoinSet::new();

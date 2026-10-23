@@ -10,3 +10,4 @@ ignore = { workspace = true }
 object_store = { workspace = true }
 futures-util = { workspace = true }
 bytes = { workspace = true }
+tokio-util = "0.7.20"

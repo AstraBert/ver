@@ -8,6 +8,7 @@ pub enum FsError {
     Delete(String),
     CreateDir(String),
     Exists(String),
+    Copy(String),
 }
 
 unsafe impl Send for FsError {}
@@ -23,6 +24,7 @@ impl Display for FsError {
             Self::Delete(s) => write!(f, "An error occurred while deleting: {}", s),
             Self::List(s) => write!(f, "An error occurred while listing: {}", s),
             Self::Exists(s) => write!(f, "An error occurred while checking path existence: {}", s),
+            Self::Copy(s) => write!(f, "An error occurred while copying: {}", s),
         }
     }
 }
