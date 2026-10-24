@@ -15,5 +15,10 @@ name = "ver"
 path = "src/lib.rs"
 
 [dependencies]
+toml = "1.1.8"
 ver-fs = { path = "../fs", version = "0.1" }
 ver-kv = { path = "../kv", version = "0.1" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = "7.0.0"
+redb = { workspace = true }
