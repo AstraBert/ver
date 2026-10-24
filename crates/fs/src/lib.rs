@@ -13,6 +13,7 @@ use tokio_util::io::StreamReader;
 use crate::errors::FsError;
 
 pub mod errors;
+pub mod object_store_factory;
 
 pub trait DirEntry: Send + Sync {
     fn path(&self) -> PathBuf;
@@ -32,7 +33,13 @@ pub trait Fs: Send + Sync {
     async fn create_dir(&self, path: &str) -> Result<(), FsError>;
     async fn exists(&self, path: &str) -> Result<bool, FsError>;
     async fn stream_read(&self, path: &str) -> Result<BoxReader, FsError>;
-    async fn copy(&self, dest: Arc<dyn Fs>) -> Result<(), FsError>;
+    async fn copy_dir(
+        &self,
+        dest: Arc<dyn Fs>,
+        path: Option<&str>,
+        ignore: bool,
+    ) -> Result<(), FsError>;
+    async fn copy_files(&self, dest: Arc<dyn Fs>, paths: Vec<&str>) -> Result<(), FsError>;
 }
 
 impl DirEntry for ignore::DirEntry {
@@ -150,8 +157,27 @@ impl Fs for DiskFs {
         Ok(Box::pin(file))
     }
 
-    async fn copy(&self, dest: Arc<dyn Fs>) -> Result<(), FsError> {
-        let mut iterator = self.list("", Some(Box::new(local_disk_walker))).await?;
+    async fn copy_dir(
+        &self,
+        dest: Arc<dyn Fs>,
+        path: Option<&str>,
+        ignore: bool,
+    ) -> Result<(), FsError> {
+        let mut iterator = if let Some(p) = path {
+            if ignore {
+                self.list(p, Some(Box::new(local_disk_walker))).await?
+            } else {
+                self.list(p, Some(Box::new(noignore_local_disk_walker)))
+                    .await?
+            }
+        } else {
+            if ignore {
+                self.list("", Some(Box::new(local_disk_walker))).await?
+            } else {
+                self.list("", Some(Box::new(noignore_local_disk_walker)))
+                    .await?
+            }
+        };
         let mut join_set = JoinSet::<Result<(), (FsError, String)>>::new();
         let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_COPIES));
 
@@ -174,6 +200,50 @@ impl Fs for DiskFs {
                     .write(&p.to_string_lossy(), content)
                     .await
                     .map_err(|e| (e, p.to_string_lossy().to_string()))?;
+
+                Ok(())
+            });
+        }
+
+        let mut failed = vec![];
+
+        while let Some(res) = join_set.join_next().await {
+            match res {
+                Ok(Ok(_)) => continue,
+                Ok(Err((_, p))) => {
+                    failed.push(p);
+                }
+                Err(e) => return Err(FsError::Copy(format!("Spawn job panicked: {e}"))),
+            }
+        }
+
+        if failed.len() > 0 {
+            return Err(FsError::Copy(format!(
+                "Failed to copy the following paths: {}",
+                failed.join(", ")
+            )));
+        }
+
+        Ok(())
+    }
+
+    async fn copy_files(&self, dest: Arc<dyn Fs>, paths: Vec<&str>) -> Result<(), FsError> {
+        let mut join_set = JoinSet::<Result<(), (FsError, String)>>::new();
+        let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_COPIES));
+
+        for p in paths {
+            let permit = sem
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| FsError::Copy(format!("Failed to acquire lock: {e}")))?;
+            let fs_dest = dest.clone();
+            let fs_src = self.clone();
+            let p = p.to_string();
+            join_set.spawn(async move {
+                let _permit = permit;
+                let content = fs_src.read(&p).await.map_err(|e| (e, p.clone()))?;
+                fs_dest.write(&p, content).await.map_err(|e| (e, p))?;
 
                 Ok(())
             });
@@ -362,8 +432,25 @@ impl Fs for ObjectStoreFs {
         Ok(Box::pin(StreamReader::new(stream)))
     }
 
-    async fn copy(&self, dest: Arc<dyn Fs>) -> Result<(), FsError> {
-        let mut iterator = self.list("", None).await?;
+    async fn copy_dir(
+        &self,
+        dest: Arc<dyn Fs>,
+        path: Option<&str>,
+        ignore: bool,
+    ) -> Result<(), FsError> {
+        let mut iterator = if let Some(p) = path {
+            if ignore {
+                self.list(p, None).await?
+            } else {
+                self.list(p, None).await?
+            }
+        } else {
+            if ignore {
+                self.list("", None).await?
+            } else {
+                self.list("", None).await?
+            }
+        };
         let mut join_set = JoinSet::<Result<(), (FsError, String)>>::new();
         let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_COPIES));
 
@@ -386,6 +473,50 @@ impl Fs for ObjectStoreFs {
                     .write(&p.to_string_lossy(), content)
                     .await
                     .map_err(|e| (e, p.to_string_lossy().to_string()))?;
+
+                Ok(())
+            });
+        }
+
+        let mut failed = vec![];
+
+        while let Some(res) = join_set.join_next().await {
+            match res {
+                Ok(Ok(_)) => continue,
+                Ok(Err((_, p))) => {
+                    failed.push(p);
+                }
+                Err(e) => return Err(FsError::Copy(format!("Spawn job panicked: {e}"))),
+            }
+        }
+
+        if failed.len() > 0 {
+            return Err(FsError::Copy(format!(
+                "Failed to copy the following paths: {}",
+                failed.join(", ")
+            )));
+        }
+
+        Ok(())
+    }
+
+    async fn copy_files(&self, dest: Arc<dyn Fs>, paths: Vec<&str>) -> Result<(), FsError> {
+        let mut join_set = JoinSet::<Result<(), (FsError, String)>>::new();
+        let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_COPIES));
+
+        for p in paths {
+            let permit = sem
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| FsError::Copy(format!("Failed to acquire lock: {e}")))?;
+            let fs_dest = dest.clone();
+            let fs_src = self.clone();
+            let p = p.to_string();
+            join_set.spawn(async move {
+                let _permit = permit;
+                let content = fs_src.read(&p).await.map_err(|e| (e, p.clone()))?;
+                fs_dest.write(&p, content).await.map_err(|e| (e, p))?;
 
                 Ok(())
             });
@@ -440,6 +571,18 @@ pub fn local_disk_walker(path: &PathBuf) -> Result<EntryIter, FsError> {
             }
         })
         .build();
+
+    let entries: Vec<ignore::DirEntry> = walker
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| FsError::List(format!("Error while collecting entries from disk: {e}")))?;
+
+    let disk_it = DiskListIterator::new(entries.into_iter());
+
+    Ok(disk_it.into_entry_iter())
+}
+
+pub fn noignore_local_disk_walker(path: &PathBuf) -> Result<EntryIter, FsError> {
+    let walker = ignore::WalkBuilder::new(path).build();
 
     let entries: Vec<ignore::DirEntry> = walker
         .collect::<Result<Vec<_>, _>>()

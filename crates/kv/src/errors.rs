@@ -4,6 +4,7 @@ use std::{error::Error, fmt::Display};
 pub enum KVError {
     Put(String),
     Get(String),
+    Copy(String),
 }
 
 impl Display for KVError {
@@ -11,6 +12,7 @@ impl Display for KVError {
         match self {
             Self::Get(s) => write!(f, "GET error: {}", s),
             Self::Put(s) => write!(f, "PUT error: {}", s),
+            Self::Copy(s) => write!(f, "Copy error: {}", s),
         }
     }
 }

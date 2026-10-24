@@ -13,11 +13,9 @@ path = "src/lib.rs"
 [dependencies]
 blake3 = { workspace = true }
 fastcdc = { version = "5.0.0", features = ["tokio", "tokio-stream"] }
-object_store = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = "0.1.19"
 tokio-util = { version = "0.7", features = ["io"] }
-postcard = { workspace = true }
 serde = { workspace = true }
 async-compression = { version = "0.4.50", features = ["tokio", "zstd"] }
 ver-fs = { path = "../fs", version = "0.1" }
