@@ -34,17 +34,17 @@ pub trait KVStore: Send + Sync {
 }
 
 #[derive(Debug, Clone)]
-pub struct RedbStore<'a> {
-    pub db: &'a Database,
+pub struct RedbStore {
+    pub db: Arc<Database>,
 }
 
-impl<'a> RedbStore<'a> {
-    pub fn new(db: &'a Database) -> Self {
+impl RedbStore {
+    pub fn new(db: Arc<Database>) -> Self {
         Self { db }
     }
 }
 
-impl<'a> KVStore for RedbStore<'a> {
+impl KVStore for RedbStore {
     fn get_snapshot(&self, key: [u8; 32]) -> Result<Option<Bytes>, KVError> {
         let rx = self
             .db

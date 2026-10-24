@@ -106,17 +106,17 @@ pub enum KVStoreContext {
     Redis { uri: String },
 }
 
-// impl KVStoreContext {
-//     pub fn build_kv(&self) -> Result<Arc<dyn KVStore>, VerError> {
-//         match self {
-//             Self::Embedded { redb_path } => {
-//                 let db = redb::Database::open(redb_path)?;
-//                 Ok(Arc::new(RedbStore::new(&db)))
-//             }
-//             Self::Redis { uri } => Ok(Arc::new(RedisStore::new(uri)?)),
-//         }
-//     }
-// }
+impl KVStoreContext {
+    pub fn build_kv(&self) -> Result<Arc<dyn KVStore>, VerError> {
+        match self {
+            Self::Embedded { redb_path } => {
+                let db = redb::Database::open(redb_path)?;
+                Ok(Arc::new(RedbStore::new(Arc::new(db))))
+            }
+            Self::Redis { uri } => Ok(Arc::new(RedisStore::new(uri)?)),
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VerContext {

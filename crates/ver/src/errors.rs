@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display, io, string::FromUtf8Error};
+use std::{array::TryFromSliceError, error::Error, fmt::Display, io, string::FromUtf8Error};
 use ver_fs::errors::FsError;
 use ver_kv::{RedisError, errors::KVError};
 
@@ -16,6 +16,14 @@ impl Display for VerError {
 }
 
 impl Error for VerError {}
+
+impl From<TryFromSliceError> for VerError {
+    fn from(value: TryFromSliceError) -> Self {
+        Self {
+            message: format!("Error while converting slice to [u8; 32]: {value}"),
+        }
+    }
+}
 
 impl From<&str> for VerError {
     fn from(value: &str) -> Self {

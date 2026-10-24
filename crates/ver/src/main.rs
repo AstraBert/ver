@@ -39,7 +39,12 @@ fn main() {
             ),
         ]),
         kv: HashMap::from([
-            ("local".to_string(), KVStoreContext::Embedded),
+            (
+                "local".to_string(),
+                KVStoreContext::Embedded {
+                    redb_path: "test".to_string(),
+                },
+            ),
             (
                 "redis".to_string(),
                 KVStoreContext::Redis {
