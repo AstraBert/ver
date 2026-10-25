@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fs,
     path::PathBuf,
+    str::FromStr,
     sync::{Arc, OnceLock},
 };
 
@@ -214,6 +215,67 @@ impl VerContext {
 
         None
     }
+
+    pub fn get_context(
+        &self,
+        context: &str,
+    ) -> Result<(FilesystemContext, KVStoreContext), VerError> {
+        if let Some(fs) = self.fs.get(context)
+            && let Some(kv) = self.kv.get(context)
+        {
+            return Ok((fs.clone(), kv.clone()));
+        }
+
+        return Err(format!("Could not find {context} among contexts").into());
+    }
+
+    pub fn scaffold(&mut self, context_name: &str, fs: FSType, kv: KVType) -> Result<(), VerError> {
+        if self.fs.contains_key(context_name) || self.kv.contains_key(context_name) {
+            return Err("Context already exists".into());
+        }
+        let kv_d = match kv {
+            KVType::Embedded => KVStoreContext::Embedded {
+                redb_path: "".to_string(),
+            },
+            KVType::Redis => KVStoreContext::Redis {
+                uri: "".to_string(),
+            },
+        };
+        let fs_d = match fs {
+            FSType::Azure => FilesystemContext::Azure {
+                account_name: "".to_string(),
+                account_key: "".to_string(),
+                endpoint: "".to_string(),
+                container_name: "".to_string(),
+            },
+            FSType::GCS => FilesystemContext::Gcs {
+                service_account_credentials_path: "".to_string(),
+                bucket: "".to_string(),
+            },
+            FSType::Local => FilesystemContext::Local {
+                base_directory: "".to_string(),
+            },
+            FSType::S3 => FilesystemContext::S3 {
+                access_key_id: "".to_string(),
+                secret_access_key: "".to_string(),
+                region: "".to_string(),
+                endpoint: "".to_string(),
+                bucket: "".to_string(),
+            },
+        };
+
+        self.fs.insert(context_name.to_string(), fs_d);
+        self.kv.insert(context_name.to_string(), kv_d);
+
+        Ok(())
+    }
+
+    pub fn to_global_context(&self) -> Result<(), VerError> {
+        let path = global_context();
+        let ser = toml::to_string_pretty(&self)?;
+        fs::write(path, ser)?;
+        Ok(())
+    }
 }
 
 pub fn read_context() -> Result<VerContext, VerError> {
@@ -227,4 +289,43 @@ pub fn read_context() -> Result<VerContext, VerError> {
     ctx.validate()?;
 
     Ok(ctx)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FSType {
+    Local,
+    S3,
+    Azure,
+    GCS,
+}
+
+impl FromStr for FSType {
+    type Err = clap::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "local" => Ok(Self::Local),
+            "s3" => Ok(Self::S3),
+            "azure" => Ok(Self::Azure),
+            "gcs" => Ok(Self::GCS),
+            _ => Err(clap::Error::new(clap::error::ErrorKind::InvalidValue)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum KVType {
+    Embedded,
+    Redis,
+}
+
+impl FromStr for KVType {
+    type Err = clap::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "embedded" => Ok(Self::Embedded),
+            "redis" => Ok(Self::Redis),
+            _ => Err(clap::Error::new(clap::error::ErrorKind::InvalidValue)),
+        }
+    }
 }

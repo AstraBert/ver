@@ -573,6 +573,12 @@ pub fn local_disk_walker(path: &PathBuf) -> Result<EntryIter, FsError> {
         .build();
 
     let entries: Vec<ignore::DirEntry> = walker
+        .filter(|p| {
+            if p.is_ok() {
+                return p.clone().unwrap().path().is_file();
+            }
+            true
+        })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| FsError::List(format!("Error while collecting entries from disk: {e}")))?;
 

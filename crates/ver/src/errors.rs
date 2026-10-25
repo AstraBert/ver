@@ -25,6 +25,14 @@ impl From<TryFromSliceError> for VerError {
     }
 }
 
+impl From<postcard::Error> for VerError {
+    fn from(value: postcard::Error) -> Self {
+        Self {
+            message: format!("Error while serializing/deserializing bytes with postcard: {value}"),
+        }
+    }
+}
+
 impl From<&str> for VerError {
     fn from(value: &str) -> Self {
         Self {
