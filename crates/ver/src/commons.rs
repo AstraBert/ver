@@ -1,11 +1,11 @@
 use std::{
     any::Any,
     str::FromStr,
-    sync::{Arc, OnceLock},
+    sync::{Arc, OnceLock, mpsc},
 };
 
 use tokio::runtime::Runtime;
-use ver_fs::{Fs, errors::FsError};
+use ver_fs::{Fs, errors::FsError, noignore_local_disk_walker};
 use ver_kv::KVStore;
 
 use crate::errors::VerError;
@@ -13,6 +13,7 @@ use crate::errors::VerError;
 pub const HEAD_PATH: &str = ".ver/head";
 pub const HISTORY_PATH: &str = ".ver/snapshots_history";
 pub static RT: OnceLock<Runtime> = OnceLock::new();
+pub const MAX_CONCURRENT_LOG_READS: usize = 64;
 
 pub fn rt() -> &'static Runtime {
     RT.get_or_init(|| {
@@ -86,6 +87,48 @@ pub fn write_history(
     })?;
 
     Ok(())
+}
+
+pub fn read_history(
+    tolerate_incomplete: bool,
+    fs: &Arc<dyn Fs>,
+) -> Result<(Vec<String>, bool), VerError> {
+    let mut it = rt().block_on(async {
+        fs.list(HISTORY_PATH, Some(Box::new(noignore_local_disk_walker)))
+            .await
+    })?;
+    let (tx, rx) = mpsc::sync_channel(MAX_CONCURRENT_LOG_READS);
+    while let Some(entry) = it.next() {
+        let fs = fs.clone();
+        let tx = tx.clone();
+        let path = entry.path();
+        rt().spawn(async move {
+            let result = fs.read(&path.to_string_lossy()).await;
+            tx.send(result).unwrap()
+        });
+    }
+    drop(tx);
+
+    let mut is_incomplete = false;
+    let mut logs: Vec<String> = vec![];
+    for res in rx {
+        match res {
+            Err(e) => {
+                if !tolerate_incomplete {
+                    return Err(e.into());
+                }
+                is_incomplete = true;
+            }
+            Ok(bts) => {
+                let s = String::from_utf8_lossy(&bts).to_string();
+                logs.push(s);
+            }
+        }
+    }
+
+    logs.sort();
+    logs.reverse();
+    Ok((logs, is_incomplete))
 }
 
 pub fn resolve_snapshot_id(identifier: &str, kv: &Arc<dyn KVStore>) -> Result<[u8; 32], VerError> {

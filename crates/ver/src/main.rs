@@ -1,10 +1,11 @@
-use std::io;
+use std::{borrow::Cow, io};
 
 use clap::{Parser, Subcommand};
 use ver::{
     context::{FSType, KVType, read_context},
     errors::VerError,
     init::init,
+    log::log,
     snap::{files_snap, full_snap},
 };
 
@@ -32,6 +33,22 @@ enum ContextCommands {
     Delete {
         /// Name of the context to delete
         context_name: String,
+    },
+    /// Show the current context
+    Show {
+        /// Whether to display the full context spec
+        /// as JSON. If disabled, only displays the name
+        /// of the context.
+        #[arg(long, short, default_value_t = false)]
+        json: bool,
+    },
+    /// List all the available contexts
+    List {
+        /// Whether to display the full context spec
+        /// as JSON. If disabled, only displays the name
+        /// of the context.
+        #[arg(long, short, default_value_t = false)]
+        json: bool,
     },
 }
 
@@ -92,6 +109,17 @@ enum Commands {
         #[arg(long, short, default_value_t = false)]
         global: bool,
     },
+    /// Display the snapshots history associated with the current
+    /// context
+    Log {
+        /// Maximum number of log entries to display
+        #[arg(long, short, default_value = None)]
+        limit: Option<usize>,
+        /// Whether to tolerate errors (and thus an incomplete
+        /// history) when reading the history
+        #[arg(long, default_value_t = false)]
+        incomplete_ok: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -128,6 +156,46 @@ fn main() -> Result<(), VerError> {
                 ctx.scaffold(&context_name, fs, kv)?;
                 ctx.to_global_context()?;
                 println!("Scaffolded {context_name}");
+                Ok(())
+            }
+            ContextCommands::Show { json } => {
+                let ctx = read_context()?;
+                if !json {
+                    println!(
+                        "{}",
+                        ctx.current
+                            .unwrap_or("WARNING: no current context".to_string())
+                    );
+                } else {
+                    let opt = ctx.current_context();
+                    if opt.is_none() {
+                        println!("WARNING: no current context");
+                        return Ok(());
+                    }
+                    let (fs_des, kv_des) = opt.unwrap();
+                    let val = serde_json::json!({
+                        "fs": &serde_json::to_value(&fs_des)?,
+                        "kv": &serde_json::to_value(&kv_des)?,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&val)?,);
+                }
+
+                Ok(())
+            }
+            ContextCommands::List { json } => {
+                let ctx = read_context()?;
+                if !json {
+                    println!(
+                        "{}",
+                        ctx.fs
+                            .keys()
+                            .map(|s| Cow::Borrowed(s.as_str()))
+                            .collect::<Vec<Cow<str>>>()
+                            .join("\n")
+                    );
+                    return Ok(());
+                }
+                println!("{}", serde_json::to_string_pretty(&ctx)?);
                 Ok(())
             }
         },
@@ -178,6 +246,14 @@ fn main() -> Result<(), VerError> {
                 println!("Successfully initialized ver for the current context");
             }
             Ok(())
+        }
+        Commands::Log {
+            limit,
+            incomplete_ok,
+        } => {
+            let stdout = io::stdout();
+            let mut lock = stdout.lock();
+            log(incomplete_ok, limit, &mut lock)
         }
     }
 }
