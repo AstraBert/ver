@@ -35,11 +35,11 @@ pub trait Fs: Send + Sync {
     async fn stream_read(&self, path: &str) -> Result<BoxReader, FsError>;
     async fn copy_dir(
         &self,
-        dest: Arc<dyn Fs>,
+        dest: &Arc<dyn Fs>,
         path: Option<&str>,
         ignore: bool,
     ) -> Result<(), FsError>;
-    async fn copy_files(&self, dest: Arc<dyn Fs>, paths: Vec<&str>) -> Result<(), FsError>;
+    async fn copy_files(&self, dest: &Arc<dyn Fs>, paths: Vec<&str>) -> Result<(), FsError>;
 }
 
 impl DirEntry for ignore::DirEntry {
@@ -181,7 +181,7 @@ impl Fs for DiskFs {
 
     async fn copy_dir(
         &self,
-        dest: Arc<dyn Fs>,
+        dest: &Arc<dyn Fs>,
         path: Option<&str>,
         ignore: bool,
     ) -> Result<(), FsError> {
@@ -249,7 +249,7 @@ impl Fs for DiskFs {
         Ok(())
     }
 
-    async fn copy_files(&self, dest: Arc<dyn Fs>, paths: Vec<&str>) -> Result<(), FsError> {
+    async fn copy_files(&self, dest: &Arc<dyn Fs>, paths: Vec<&str>) -> Result<(), FsError> {
         let mut join_set = JoinSet::<Result<(), (FsError, String)>>::new();
         let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_COPIES));
 
@@ -456,7 +456,7 @@ impl Fs for ObjectStoreFs {
 
     async fn copy_dir(
         &self,
-        dest: Arc<dyn Fs>,
+        dest: &Arc<dyn Fs>,
         path: Option<&str>,
         ignore: bool,
     ) -> Result<(), FsError> {
@@ -522,7 +522,7 @@ impl Fs for ObjectStoreFs {
         Ok(())
     }
 
-    async fn copy_files(&self, dest: Arc<dyn Fs>, paths: Vec<&str>) -> Result<(), FsError> {
+    async fn copy_files(&self, dest: &Arc<dyn Fs>, paths: Vec<&str>) -> Result<(), FsError> {
         let mut join_set = JoinSet::<Result<(), (FsError, String)>>::new();
         let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_COPIES));
 

@@ -46,7 +46,7 @@ pub fn goto<O: Write, E: Write>(
     }
     let snapshot: Snapshot = postcard::from_bytes(&compressed.unwrap())?;
 
-    let paths: Vec<String> = if !paths.is_empty() {
+    let mut paths: Vec<String> = if !paths.is_empty() {
         paths
     } else {
         rt().block_on(async { fs.list("", Some(Box::new(local_disk_walker))).await })?
@@ -60,11 +60,42 @@ pub fn goto<O: Write, E: Write>(
     let (wtx, wrx) = mpsc::channel::<Result<(), (String, String)>>();
     let (dtx, drx) = mpsc::channel::<Result<(), (String, String)>>();
 
-    for path in paths {
-        if !snapshot.repository_state.contains_key(&path)
-            && !snapshot.partial
-            && delete_if_not_in_snapshot
-        {
+    for (path, chunks) in snapshot.repository_state {
+        let idx = paths.iter().position(|a| a == &path);
+        let permit = rt().block_on(async {
+            wsem.clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| format!("Could not acquire writing semaphore: {e}"))
+        })?;
+        let db = db.clone();
+        let wtx = wtx.clone();
+        let chunks = Arc::new(chunks.clone());
+        rt().spawn(async move {
+            let _permit = permit;
+            let res = db
+                .get(chunks)
+                .await
+                .map_err(|e| (e.to_string(), path.clone()));
+            match res {
+                Ok(c) => {
+                    let new = db
+                        .fs
+                        .write(&path, Bytes::from_owner(c))
+                        .await
+                        .map_err(|e| (e.to_string(), path));
+                    wtx.send(new).unwrap()
+                }
+                Err(e) => wtx.send(Err(e)).unwrap(),
+            }
+        });
+        if let Some(pos) = idx {
+            paths.remove(pos);
+        }
+    }
+
+    if !paths.is_empty() && !snapshot.partial && delete_if_not_in_snapshot {
+        for path in paths {
             let permit = rt().block_on(async {
                 dsem.clone()
                     .acquire_owned()
@@ -78,36 +109,9 @@ pub fn goto<O: Write, E: Write>(
                 let res = fs.delete(&path).await.map_err(|e| (e.to_string(), path));
                 dtx.send(res).unwrap()
             });
-        } else if let Some(chunks) = snapshot.repository_state.get(&path) {
-            let permit = rt().block_on(async {
-                wsem.clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|e| format!("Could not acquire writing semaphore: {e}"))
-            })?;
-            let db = db.clone();
-            let wtx = wtx.clone();
-            let chunks = Arc::new(chunks.clone());
-            rt().spawn(async move {
-                let _permit = permit;
-                let res = db
-                    .get(chunks)
-                    .await
-                    .map_err(|e| (e.to_string(), path.clone()));
-                match res {
-                    Ok(c) => {
-                        let new = db
-                            .fs
-                            .write(&path, Bytes::from_owner(c))
-                            .await
-                            .map_err(|e| (e.to_string(), path));
-                        wtx.send(new).unwrap()
-                    }
-                    Err(e) => wtx.send(Err(e)).unwrap(),
-                }
-            });
         }
     }
+
     drop(wtx);
     drop(dtx);
 

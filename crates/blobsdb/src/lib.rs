@@ -176,7 +176,7 @@ impl BlobsDBWithFs {
 
     pub async fn copy(&self, dest: &BlobsDBWithFs) -> Result<(), String> {
         self.fs
-            .copy_dir(dest.fs.clone(), Some(BLOBSDB_PREFIX), false)
+            .copy_dir(&dest.fs.clone(), Some(BLOBSDB_PREFIX), false)
             .await
             .map_err(|e| e.to_string())
     }

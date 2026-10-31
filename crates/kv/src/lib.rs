@@ -30,7 +30,7 @@ pub trait KVStore: Send + Sync {
     fn put_name(&self, key: &str, value: [u8; 32]) -> Result<(), KVError>;
     fn get_merge(&self, key: &str) -> Result<Option<Bytes>, KVError>;
     fn put_merge(&self, key: &str, value: &[u8]) -> Result<(), KVError>;
-    fn copy(&self, dest: Arc<dyn KVStore>) -> Result<(), KVError>;
+    fn copy(&self, dest: &Arc<dyn KVStore>) -> Result<(), KVError>;
 }
 
 #[derive(Debug, Clone)]
@@ -174,7 +174,7 @@ impl KVStore for RedbStore {
         Ok(())
     }
 
-    fn copy(&self, dest: Arc<dyn KVStore>) -> Result<(), KVError> {
+    fn copy(&self, dest: &Arc<dyn KVStore>) -> Result<(), KVError> {
         let rx = self.db.begin_read().map_err(|e| {
             KVError::Copy(format!(
                 "Error while opening the read transaction for the copy: {e}"
@@ -386,7 +386,7 @@ impl KVStore for RedisStore {
             .map_err(|e| KVError::Put(format!("Error while executing Redis `set` command: {e}")))
     }
 
-    fn copy(&self, dest: Arc<dyn KVStore>) -> Result<(), KVError> {
+    fn copy(&self, dest: &Arc<dyn KVStore>) -> Result<(), KVError> {
         let mut con = self
             .client
             .get_connection()

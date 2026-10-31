@@ -7,3 +7,4 @@ pub mod init;
 pub mod log;
 pub mod show;
 pub mod snap;
+pub mod sync;

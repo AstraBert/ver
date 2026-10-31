@@ -11,6 +11,7 @@ use ver::{
     log::log,
     show::show_file,
     snap::{files_snap, full_snap},
+    sync::sync,
 };
 
 #[derive(Debug, Subcommand)]
@@ -174,6 +175,19 @@ enum Commands {
         /// against
         #[arg(long, short)]
         base: String,
+    },
+    /// Sync a context with another.
+    /// Assumes both are associated
+    /// with the same project and
+    /// the target context is behind
+    /// in snapshot history
+    Sync {
+        #[arg(short, long, default_value = None)]
+        source: Option<String>,
+        #[arg(short, long)]
+        target: String,
+        #[arg(short, long, default_value_t = false)]
+        from_scratch: bool,
     },
 }
 
@@ -344,6 +358,15 @@ fn main() -> Result<(), VerError> {
             let mut stdout = PagerWriter::new(pager);
             diff(&path, head, base, &mut stdout)?;
             minus::page_all(stdout.pager).map_err(|e| e.into())
+        }
+        Commands::Sync {
+            source,
+            target,
+            from_scratch,
+        } => {
+            let stdout = io::stdout();
+            let mut lock = stdout.lock();
+            sync(source, target, from_scratch, &mut lock)
         }
     }
 }

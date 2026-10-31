@@ -8,22 +8,17 @@ use crate::{
     errors::VerError,
 };
 
-pub fn init(global: bool) -> Result<(), VerError> {
-    if global {
-        fs::create_dir_all(
-            dirs::home_dir()
-                .expect("Should have a HOME directory")
-                .join(".ver"),
-        )?;
-        return Ok(());
-    }
-
+pub fn init_context(context: Option<&str>) -> Result<(), VerError> {
     let ctx = read_context()?;
-    let opt = ctx.current_context();
+    let opt = if context.is_none() {
+        ctx.current_context()
+    } else {
+        ctx.get_context(context.unwrap()).ok()
+    };
 
     if opt.is_none() {
         return Err(
-            "No context is currently active, cannot initialize the associated repository".into(),
+            "The requested context does not seem to exist or be active, cannot initialize the associated project".into(),
         );
     }
 
@@ -46,4 +41,17 @@ pub fn init(global: bool) -> Result<(), VerError> {
     }
 
     Ok(())
+}
+
+pub fn init(global: bool) -> Result<(), VerError> {
+    if global {
+        fs::create_dir_all(
+            dirs::home_dir()
+                .expect("Should have a HOME directory")
+                .join(".ver"),
+        )?;
+        return Ok(());
+    }
+
+    init_context(None)
 }
