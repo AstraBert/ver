@@ -21,6 +21,8 @@ use crate::{
 pub struct Snapshot {
     pub repository_state: HashMap<String, Vec<Chunk>>,
     pub parent_ids: Vec<[u8; 32]>,
+    #[serde(default)]
+    pub partial: bool,
 }
 
 pub fn full_snap<O: io::Write, E: io::Write>(
@@ -90,6 +92,7 @@ pub fn full_snap<O: io::Write, E: io::Write>(
     let snap = Snapshot {
         repository_state: state,
         parent_ids,
+        partial: false,
     };
 
     let compressed = postcard::to_allocvec(&snap)?;
@@ -186,6 +189,7 @@ pub fn files_snap<O: io::Write, E: io::Write>(
     let snap = Snapshot {
         repository_state: state,
         parent_ids,
+        partial: !existing,
     };
 
     let compressed = postcard::to_allocvec(&snap)?;

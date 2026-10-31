@@ -21,7 +21,7 @@ pub trait DirEntry: Send + Sync {
 
 pub const MAX_CONCURRENT_COPIES: usize = 16;
 pub type EntryIter = Box<dyn Iterator<Item = Box<dyn DirEntry>> + Send>;
-pub type Walker = Box<dyn Fn(&PathBuf) -> Result<EntryIter, FsError> + Send + Sync>;
+pub type Walker = Box<dyn Fn(&PathBuf, &PathBuf) -> Result<EntryIter, FsError> + Send + Sync>;
 pub type BoxReader = Pin<Box<dyn AsyncRead + Send>>;
 
 #[async_trait::async_trait]
@@ -49,8 +49,19 @@ impl DirEntry for ignore::DirEntry {
 }
 
 #[derive(Debug)]
+pub struct RelativeDirEntry {
+    pub path: PathBuf,
+}
+
+impl DirEntry for RelativeDirEntry {
+    fn path(&self) -> PathBuf {
+        self.path.to_owned()
+    }
+}
+
+#[derive(Debug)]
 pub struct DiskListIterator {
-    inner: std::vec::IntoIter<ignore::DirEntry>,
+    inner: std::vec::IntoIter<RelativeDirEntry>,
 }
 
 impl DiskListIterator {
@@ -60,7 +71,7 @@ impl DiskListIterator {
 }
 
 impl Iterator for DiskListIterator {
-    type Item = ignore::DirEntry;
+    type Item = RelativeDirEntry;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next()
@@ -68,7 +79,7 @@ impl Iterator for DiskListIterator {
 }
 
 impl DiskListIterator {
-    pub fn new(inner: std::vec::IntoIter<ignore::DirEntry>) -> Self {
+    pub fn new(inner: std::vec::IntoIter<RelativeDirEntry>) -> Self {
         Self { inner }
     }
 }
@@ -94,6 +105,16 @@ impl DiskFs {
         } else {
             self.base_dir.join(p)
         }
+    }
+}
+
+fn to_relative_path(entry: ignore::DirEntry, parent: &PathBuf) -> RelativeDirEntry {
+    let p = entry.path();
+    let rel = p
+        .strip_prefix(parent)
+        .expect("Should always start with self.base_dir");
+    RelativeDirEntry {
+        path: rel.to_path_buf(),
     }
 }
 
@@ -127,8 +148,9 @@ impl Fs for DiskFs {
 
     async fn list(&self, path: &str, walker_fn: Option<Walker>) -> Result<EntryIter, FsError> {
         let p = self.prefix_path(path);
+        let parent = self.base_dir.clone();
         if let Some(walker) = walker_fn {
-            let entries = tokio::task::spawn_blocking(move || walker(&p))
+            let entries = tokio::task::spawn_blocking(move || walker(&p, &parent))
                 .await
                 .map_err(|e| FsError::List(e.to_string()))??;
 
@@ -545,7 +567,7 @@ impl Fs for ObjectStoreFs {
     }
 }
 
-pub fn local_disk_walker(path: &PathBuf) -> Result<EntryIter, FsError> {
+pub fn local_disk_walker(path: &PathBuf, parent: &PathBuf) -> Result<EntryIter, FsError> {
     let walker = ignore::WalkBuilder::new(path)
         .add_custom_ignore_filename(".verignore")
         .hidden(false)
@@ -582,12 +604,17 @@ pub fn local_disk_walker(path: &PathBuf) -> Result<EntryIter, FsError> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| FsError::List(format!("Error while collecting entries from disk: {e}")))?;
 
-    let disk_it = DiskListIterator::new(entries.into_iter());
+    let new_entries: Vec<RelativeDirEntry> = entries
+        .into_iter()
+        .map(|e| to_relative_path(e, parent))
+        .collect();
+
+    let disk_it = DiskListIterator::new(new_entries.into_iter());
 
     Ok(disk_it.into_entry_iter())
 }
 
-pub fn noignore_local_disk_walker(path: &PathBuf) -> Result<EntryIter, FsError> {
+pub fn noignore_local_disk_walker(path: &PathBuf, parent: &PathBuf) -> Result<EntryIter, FsError> {
     let walker = ignore::WalkBuilder::new(path).build();
 
     let entries: Vec<ignore::DirEntry> = walker
@@ -600,7 +627,12 @@ pub fn noignore_local_disk_walker(path: &PathBuf) -> Result<EntryIter, FsError> 
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| FsError::List(format!("Error while collecting entries from disk: {e}")))?;
 
-    let disk_it = DiskListIterator::new(entries.into_iter());
+    let new_entries: Vec<RelativeDirEntry> = entries
+        .into_iter()
+        .map(|e| to_relative_path(e, parent))
+        .collect();
+
+    let disk_it = DiskListIterator::new(new_entries.into_iter());
 
     Ok(disk_it.into_entry_iter())
 }

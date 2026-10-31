@@ -1,9 +1,11 @@
 use std::{
     any::Any,
+    io,
     str::FromStr,
     sync::{Arc, OnceLock, mpsc},
 };
 
+use minus::Pager;
 use tokio::runtime::Runtime;
 use ver_fs::{Fs, errors::FsError, noignore_local_disk_walker};
 use ver_kv::KVStore;
@@ -142,5 +144,43 @@ pub fn resolve_snapshot_id(identifier: &str, kv: &Arc<dyn KVStore>) -> Result<[u
             }
             Err(format!("Could not find {identifier} among snapshots").into())
         }
+    }
+}
+
+pub struct PagerWriter {
+    pub pager: Pager,
+    pub pending: Vec<u8>, // incomplete UTF-8 sequence carried to the next write
+}
+
+impl PagerWriter {
+    pub fn new(pager: Pager) -> Self {
+        Self {
+            pager,
+            pending: Vec::new(),
+        }
+    }
+}
+
+impl io::Write for PagerWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.pending.extend_from_slice(buf);
+
+        let valid_up_to = match std::str::from_utf8(&self.pending) {
+            Ok(s) => s.len(),
+            // error_len() == None means "unexpected end of input": wait for more bytes
+            Err(e) if e.error_len().is_none() => e.valid_up_to(),
+            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+        };
+
+        // Safe: we just validated this prefix
+        let text = std::str::from_utf8(&self.pending[..valid_up_to]).unwrap();
+        self.pager.push_str(text).map_err(io::Error::other)?;
+        self.pending.drain(..valid_up_to);
+
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(()) // the pager has no buffering on our side to flush
     }
 }

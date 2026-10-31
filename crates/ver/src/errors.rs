@@ -17,6 +17,14 @@ impl Display for VerError {
 
 impl Error for VerError {}
 
+impl From<minus::MinusError> for VerError {
+    fn from(value: minus::MinusError) -> Self {
+        Self {
+            message: format!("Minus error: {value}"),
+        }
+    }
+}
+
 impl From<TryFromSliceError> for VerError {
     fn from(value: TryFromSliceError) -> Self {
         Self {

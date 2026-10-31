@@ -2,10 +2,14 @@ use std::{borrow::Cow, io};
 
 use clap::{Parser, Subcommand};
 use ver::{
+    commons::PagerWriter,
     context::{FSType, KVType, read_context},
+    diff::diff,
     errors::VerError,
+    goto::goto,
     init::init,
     log::log,
+    show::show_file,
     snap::{files_snap, full_snap},
 };
 
@@ -119,6 +123,57 @@ enum Commands {
         /// history) when reading the history
         #[arg(long, default_value_t = false)]
         incomplete_ok: bool,
+    },
+    /// Revert the whole project or some specified paths
+    /// to a previous snapshot
+    Goto {
+        /// Snapshot ID or name
+        snapshot_id_or_name: String,
+        /// Relative path to a specific file to restore.
+        /// Can be used multiple times.
+        #[arg(long, short)]
+        path: Vec<String>,
+        /// Do not delete files
+        /// if they are not in
+        /// the target snapshot (only
+        /// applicable if the target
+        /// snapshot was a full snapshot)
+        #[arg(long, short, default_value_t = false)]
+        no_delete: bool,
+    },
+    /// Show the content of a file, optionally
+    /// specifing the snapshot to read the
+    /// file from
+    Show {
+        /// Relative path of the file
+        /// whose contents are to display
+        path: String,
+        /// ID or name of the snapshot
+        /// to read the file from.
+        /// Defaults to the current head.
+        #[arg(long, short, default_value = None)]
+        snapshot: Option<String>,
+        /// Offset (in bytes)
+        #[arg(long, short, default_value = None)]
+        offset: Option<usize>,
+        /// Maximum number of bytes to read
+        #[arg(long, short, default_value = None)]
+        limit: Option<usize>,
+    },
+    /// Show the diff on a file
+    /// between two snapshots
+    Diff {
+        /// Path of the file
+        /// to diff
+        path: String,
+        /// Head snapshot (defaults
+        /// to current head)
+        #[arg(long, default_value = None)]
+        head: Option<String>,
+        /// Base snapshot to diff
+        /// against
+        #[arg(long, short)]
+        base: String,
     },
 }
 
@@ -251,9 +306,44 @@ fn main() -> Result<(), VerError> {
             limit,
             incomplete_ok,
         } => {
+            let pager = minus::Pager::new();
+            let mut stdout = PagerWriter::new(pager);
+            log(incomplete_ok, limit, &mut stdout)?;
+            minus::page_all(stdout.pager).map_err(|e| e.into())
+        }
+        Commands::Goto {
+            snapshot_id_or_name,
+            path,
+            no_delete,
+        } => {
             let stdout = io::stdout();
             let mut lock = stdout.lock();
-            log(incomplete_ok, limit, &mut lock)
+            let stderr = io::stderr();
+            let mut errlock = stderr.lock();
+            goto(
+                &snapshot_id_or_name,
+                path,
+                !no_delete,
+                &mut lock,
+                &mut errlock,
+            )
+        }
+        Commands::Show {
+            path,
+            snapshot,
+            offset,
+            limit,
+        } => {
+            let pager = minus::Pager::new();
+            let mut stdout = PagerWriter::new(pager);
+            show_file(&path, snapshot, offset, limit, &mut stdout)?;
+            minus::page_all(stdout.pager).map_err(|e| e.into())
+        }
+        Commands::Diff { path, head, base } => {
+            let pager = minus::Pager::new();
+            let mut stdout = PagerWriter::new(pager);
+            diff(&path, head, base, &mut stdout)?;
+            minus::page_all(stdout.pager).map_err(|e| e.into())
         }
     }
 }

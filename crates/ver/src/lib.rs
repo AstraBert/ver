@@ -1,6 +1,9 @@
 pub mod commons;
 pub mod context;
+pub mod diff;
 pub mod errors;
+pub mod goto;
 pub mod init;
 pub mod log;
+pub mod show;
 pub mod snap;
