@@ -92,6 +92,7 @@ pub fn find_common_ancestor(
 pub fn reconstruct_head_snapshot(
     head: [u8; 32],
     db: &BlobsDBWithFs,
+    fs: &Arc<dyn Fs>,
     kv: &Arc<dyn KVStore>,
 ) -> Result<(), VerError> {
     let compressed = kv.get_snapshot(head)?;
@@ -118,6 +119,7 @@ pub fn reconstruct_head_snapshot(
                 .map_err(|e| format!("Could not acquire writing semaphore: {e}"))
         })?;
         let db = db.clone();
+        let fs = fs.clone();
         let wtx = wtx.clone();
         let chunks = Arc::new(chunks.clone());
         rt().spawn(async move {
@@ -128,8 +130,7 @@ pub fn reconstruct_head_snapshot(
                 .map_err(|e| (e.to_string(), path.clone()));
             match res {
                 Ok(c) => {
-                    let new = db
-                        .fs
+                    let new = fs
                         .write(&path, Bytes::from_owner(c))
                         .await
                         .map_err(|e| (e.to_string(), path));
@@ -151,7 +152,7 @@ pub fn reconstruct_head_snapshot(
                     .await
                     .map_err(|e| format!("Could not acquire deletion semaphore: {e}"))
             })?;
-            let fs = db.fs.clone();
+            let fs = fs.clone();
             let dtx = dtx.clone();
             rt().spawn(async move {
                 let _permit = permit;
@@ -259,12 +260,12 @@ pub fn sync<O: io::Write>(
         let _ = writeln!(stdout, "Copying blobs to target context");
         rt().block_on(async { blobsdb_from.copy(&blobsdb_to).await })?;
         let _ = writeln!(stdout, "Copying snapshot history to target context");
-        rt().block_on(async { fs_from.copy_files(&fs_to, vec![HISTORY_PATH]).await })?;
+        rt().block_on(async { fs_from.copy_dir(&fs_to, Some(HISTORY_PATH), false).await })?;
         let _ = writeln!(stdout, "Copying KV entries to target context");
         kv_from.copy(&kv_to)?;
         let head = head_from.unwrap();
         let _ = writeln!(stdout, "Reconstructing head snapshot in target context");
-        reconstruct_head_snapshot(head, &blobsdb_from, &kv_to)?;
+        reconstruct_head_snapshot(head, &blobsdb_from, &fs_to, &kv_to)?;
         let _ = writeln!(stdout, "Writing head to target context");
         write_head(head, &fs_to)?;
         writeln!(
@@ -300,7 +301,7 @@ pub fn sync<O: io::Write>(
     }
 
     let _ = writeln!(stdout, "Reconstructing head snapshot in target context");
-    reconstruct_head_snapshot(head_from, &blobsdb_from, &kv_to)?;
+    reconstruct_head_snapshot(head_from, &blobsdb_from, &fs_to, &kv_to)?;
 
     let _ = writeln!(stdout, "Writing head to target context");
     write_head(head_from, &fs_to)?;

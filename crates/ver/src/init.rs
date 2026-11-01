@@ -37,7 +37,8 @@ pub fn init_context(context: Option<&str>) -> Result<(), VerError> {
     // only needed for embedded, redis is a separate
     // process
     if let KVStoreContext::Embedded { redb_path } = kv {
-        redb::Database::create(redb_path)?;
+        let db = redb::Database::create(redb_path)?;
+        drop(db);
     }
 
     Ok(())

@@ -6,7 +6,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use redb::{Database, ReadableDatabase, TableDefinition};
+use redb::{Database, ReadableDatabase, TableDefinition, TableError};
 pub use redis::RedisError;
 use redis::{Client, Commands};
 
@@ -181,114 +181,147 @@ impl KVStore for RedbStore {
             ))
         })?;
 
-        let snapshots = rx.open_table(SNAPSHOT_TABLE).map_err(|e| {
-            KVError::Copy(format!(
-                "Error while opening the snapshots table for the copy: {e}"
-            ))
-        })?;
+        let result = rx.open_table(SNAPSHOT_TABLE);
 
-        let (chan_tx, chan_rx) = mpsc::sync_channel::<Result<(), KVError>>(BOUNDED_CONCURRENCY);
+        match result {
+            Ok(snapshots) => {
+                let (chan_tx, chan_rx) =
+                    mpsc::sync_channel::<Result<(), KVError>>(BOUNDED_CONCURRENCY);
 
-        #[allow(for_loops_over_fallibles)]
-        for range in snapshots.range_owned::<[u8; 32]>(RangeFull) {
-            if let Some(Ok(entry)) = range.into_iter().next() {
-                let (k, v) = entry;
-                let dest_kv = dest.clone();
-                let sender = chan_tx.clone();
-                thread::spawn(move || {
-                    let res = dest_kv.put_snapshot(k.value(), v.value()).map_err(|e| {
-                        KVError::Copy(format!(
-                            "Error while writing value to the destination KV: {e}"
-                        ))
-                    });
-                    sender.send(res).unwrap();
-                });
+                #[allow(for_loops_over_fallibles)]
+                for range in snapshots.range_owned::<[u8; 32]>(RangeFull) {
+                    if let Some(Ok(entry)) = range.into_iter().next() {
+                        let (k, v) = entry;
+                        let dest_kv = dest.clone();
+                        let sender = chan_tx.clone();
+                        thread::spawn(move || {
+                            let res = dest_kv.put_snapshot(k.value(), v.value()).map_err(|e| {
+                                KVError::Copy(format!(
+                                    "Error while writing value to the destination KV: {e}"
+                                ))
+                            });
+                            sender.send(res).unwrap();
+                        });
+                    }
+                }
+
+                drop(chan_tx);
+
+                for res in chan_rx {
+                    match res {
+                        Ok(()) => continue,
+                        Err(e) => {
+                            return Err(KVError::Copy(format!(
+                                "Error while copying snapshots: {e}"
+                            )));
+                        }
+                    }
+                }
             }
-        }
-
-        drop(chan_tx);
-
-        for res in chan_rx {
-            match res {
-                Ok(()) => continue,
-                Err(e) => return Err(KVError::Copy(format!("Error while copying snapshots: {e}"))),
-            }
-        }
-
-        let merges = rx.open_table(PARTIAL_MERGES_TABLE).map_err(|e| {
-            KVError::Copy(format!(
-                "Error while opening the partial_merges table for the copy: {e}"
-            ))
-        })?;
-
-        let (merges_tx, merges_rx) = mpsc::sync_channel::<Result<(), KVError>>(BOUNDED_CONCURRENCY);
-
-        #[allow(for_loops_over_fallibles)]
-        for range in merges.range_owned::<&str>(RangeFull) {
-            for entry in range {
-                let (k, v) = entry
-                    .map_err(|e| KVError::Copy(format!("Error while listing redb entries: {e}")))?;
-                let dest_kv = dest.clone();
-                let sender = merges_tx.clone();
-                thread::spawn(move || {
-                    let res = dest_kv.put_merge(k.value(), v.value()).map_err(|e| {
-                        KVError::Copy(format!(
-                            "Error while writing value to the destination KV: {e}"
-                        ))
-                    });
-                    sender.send(res).unwrap();
-                });
-            }
-        }
-
-        drop(merges_tx);
-
-        for res in merges_rx {
-            match res {
-                Ok(()) => continue,
-                Err(e) => {
+            Err(e) => match e {
+                TableError::TableDoesNotExist(_) => {}
+                _ => {
                     return Err(KVError::Copy(format!(
-                        "Error while copying partial_merges: {e}"
+                        "Error while opening the snapshots table: {e}"
                     )));
                 }
-            }
+            },
         }
 
-        let names = rx.open_table(NAMES_TABLE).map_err(|e| {
-            KVError::Copy(format!(
-                "Error while opening the names table for the copy: {e}"
-            ))
-        })?;
+        let resultm = rx.open_table(PARTIAL_MERGES_TABLE);
 
-        let (names_tx, names_rx) = mpsc::sync_channel::<Result<(), KVError>>(BOUNDED_CONCURRENCY);
+        match resultm {
+            Ok(merges) => {
+                let (merges_tx, merges_rx) =
+                    mpsc::sync_channel::<Result<(), KVError>>(BOUNDED_CONCURRENCY);
 
-        #[allow(for_loops_over_fallibles)]
-        for range in names.range_owned::<&str>(RangeFull) {
-            for entry in range {
-                let (k, v) = entry
-                    .map_err(|e| KVError::Copy(format!("Error while listing redb entries: {e}")))?;
-                let dest_kv = dest.clone();
-                let sender = names_tx.clone();
-                thread::spawn(move || {
-                    let res = dest_kv.put_name(k.value(), v.value()).map_err(|e| {
-                        KVError::Copy(format!(
-                            "Error while writing value to the destination KV: {e}"
-                        ))
-                    });
-                    sender.send(res).unwrap();
-                });
-            }
-        }
+                #[allow(for_loops_over_fallibles)]
+                for range in merges.range_owned::<&str>(RangeFull) {
+                    for entry in range {
+                        let (k, v) = entry.map_err(|e| {
+                            KVError::Copy(format!("Error while listing redb entries: {e}"))
+                        })?;
+                        let dest_kv = dest.clone();
+                        let sender = merges_tx.clone();
+                        thread::spawn(move || {
+                            let res = dest_kv.put_merge(k.value(), v.value()).map_err(|e| {
+                                KVError::Copy(format!(
+                                    "Error while writing value to the destination KV: {e}"
+                                ))
+                            });
+                            sender.send(res).unwrap();
+                        });
+                    }
+                }
 
-        drop(names_tx);
+                drop(merges_tx);
 
-        for res in names_rx {
-            match res {
-                Ok(()) => continue,
-                Err(e) => {
-                    return Err(KVError::Copy(format!("Error while copying names: {e}")));
+                for res in merges_rx {
+                    match res {
+                        Ok(()) => continue,
+                        Err(e) => {
+                            return Err(KVError::Copy(format!(
+                                "Error while copying partial_merges: {e}"
+                            )));
+                        }
+                    }
                 }
             }
+            Err(e) => match e {
+                TableError::TableDoesNotExist(_) => {}
+                _ => {
+                    return Err(KVError::Copy(format!(
+                        "Error while opening the partial_merges table: {e}"
+                    )));
+                }
+            },
+        }
+
+        let resultn = rx.open_table(NAMES_TABLE);
+
+        match resultn {
+            Ok(names) => {
+                let (names_tx, names_rx) =
+                    mpsc::sync_channel::<Result<(), KVError>>(BOUNDED_CONCURRENCY);
+
+                #[allow(for_loops_over_fallibles)]
+                for range in names.range_owned::<&str>(RangeFull) {
+                    for entry in range {
+                        let (k, v) = entry.map_err(|e| {
+                            KVError::Copy(format!("Error while listing redb entries: {e}"))
+                        })?;
+                        let dest_kv = dest.clone();
+                        let sender = names_tx.clone();
+                        thread::spawn(move || {
+                            let res = dest_kv.put_name(k.value(), v.value()).map_err(|e| {
+                                KVError::Copy(format!(
+                                    "Error while writing value to the destination KV: {e}"
+                                ))
+                            });
+                            sender.send(res).unwrap();
+                        });
+                    }
+                }
+
+                drop(names_tx);
+
+                for res in names_rx {
+                    match res {
+                        Ok(()) => continue,
+                        Err(e) => {
+                            return Err(KVError::Copy(format!("Error while copying names: {e}")));
+                        }
+                    }
+                }
+            }
+            Err(e) => match e {
+                TableError::TableDoesNotExist(_) => {}
+                _ => {
+                    return Err(KVError::Copy(format!(
+                        "Error while opening the names table: {e}"
+                    )));
+                }
+            },
         }
 
         Ok(())
