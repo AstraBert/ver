@@ -30,6 +30,7 @@ pub trait KVStore: Send + Sync {
     fn put_name(&self, key: &str, value: [u8; 32]) -> Result<(), KVError>;
     fn get_merge(&self, key: &str) -> Result<Option<Bytes>, KVError>;
     fn put_merge(&self, key: &str, value: &[u8]) -> Result<(), KVError>;
+    fn delete_merge(&self, key: &str) -> Result<(), KVError>;
     fn copy(&self, dest: &Arc<dyn KVStore>) -> Result<(), KVError>;
 }
 
@@ -170,6 +171,33 @@ impl KVStore for RedbStore {
 
         wx.commit()
             .map_err(|e| KVError::Put(format!("Commit failed for write operation: {e}")))?;
+
+        Ok(())
+    }
+
+    fn delete_merge(&self, key: &str) -> Result<(), KVError> {
+        let wx = self.db.begin_write().map_err(|e| {
+            KVError::Delete(format!(
+                "Error while opening the write transaction for the merge deletion: {e}"
+            ))
+        })?;
+
+        {
+            let mut table = wx.open_table(PARTIAL_MERGES_TABLE).map_err(|e| {
+                KVError::Delete(format!(
+                    "Error while opening redb partial_merges table in writing mode: {e}"
+                ))
+            })?;
+            table.remove(key).map_err(|e| {
+                KVError::Delete(format!("Deletion failed on partial_merges table: {e}"))
+            })?;
+        }
+
+        wx.commit().map_err(|e| {
+            KVError::Delete(format!(
+                "Error while commiting the deletion to the partial_merges table: {e}"
+            ))
+        })?;
 
         Ok(())
     }
@@ -424,6 +452,15 @@ impl KVStore for RedisStore {
             .map_err(|e| KVError::Put(format!("Error while getting Redis connection: {e}")))?;
         con.set(format!("{}/{}", PARTIAL_MERGES_NAMESPACE, key), value)
             .map_err(|e| KVError::Put(format!("Error while executing Redis `set` command: {e}")))
+    }
+
+    fn delete_merge(&self, key: &str) -> Result<(), KVError> {
+        let mut con = self
+            .client
+            .get_connection()
+            .map_err(|e| KVError::Delete(format!("Error while getting Redis connection: {e}")))?;
+        con.del(format!("{}/{}", PARTIAL_MERGES_NAMESPACE, key))
+            .map_err(|e| KVError::Put(format!("Error while executing Redis `del` command: {e}")))
     }
 
     fn copy(&self, dest: &Arc<dyn KVStore>) -> Result<(), KVError> {

@@ -118,7 +118,7 @@ pub fn read_history(
     drop(tx);
 
     let mut is_incomplete = false;
-    let mut logs: Vec<String> = vec![];
+    let mut logs: Vec<(String, DateTime<Utc>)> = vec![];
     for res in rx {
         match res {
             Err(e) => {
@@ -129,24 +129,16 @@ pub fn read_history(
             }
             Ok(bts) => {
                 let s = String::from_utf8_lossy(&bts).to_string();
-                logs.push(s);
+                let parts = s.split("\t").collect::<Vec<&str>>();
+                let dt = parts.first().expect("Should have at least 3 parts");
+                let utc = parse_date(&dt).expect("First part should be a date");
+                logs.push((s, utc));
             }
         }
     }
 
-    let mut dates: Vec<(usize, DateTime<Utc>)> = logs
-        .iter()
-        .enumerate()
-        .filter_map(|(i, s)| {
-            let parts = s.split("\t").collect::<Vec<&str>>();
-            let dt = parts.first().expect("First element should be the date");
-            let utc = parse_date(dt).expect("Should parse correctly to UTC time");
-            Some((i, utc))
-        })
-        .collect();
-
-    dates.sort_by(|a, b| b.1.cmp(&a.1));
-    let sorted_logs: Vec<String> = dates.iter().map(|(i, _)| logs[*i].to_owned()).collect();
+    logs.sort_by(|a, b| b.1.cmp(&a.1));
+    let sorted_logs = logs.into_iter().map(|(s, _)| s).collect();
 
     Ok((sorted_logs, is_incomplete))
 }

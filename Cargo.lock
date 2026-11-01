@@ -2607,6 +2607,7 @@ dependencies = [
  "clap",
  "diffy",
  "dirs",
+ "futures-util",
  "minus",
  "postcard",
  "pretty-hex",

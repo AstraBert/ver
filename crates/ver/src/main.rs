@@ -9,6 +9,7 @@ use ver::{
     goto::goto,
     init::init,
     log::log,
+    merge::{merge_end, merge_pick, merge_run},
     show::show_file,
     snap::{files_snap, full_snap},
     sync::sync,
@@ -55,11 +56,77 @@ enum ContextCommands {
         #[arg(long, short, default_value_t = false)]
         json: bool,
     },
+    /// Initialize ver (globally or for the current context).
+    Init {
+        /// Initialize ver globally. If not provided, it will
+        /// try to initializa the project associated
+        /// with the current context
+        #[arg(long, short, default_value_t = false)]
+        global: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MergeCommands {
+    /// Run a merge between the
+    /// current ver context
+    /// and another context on the same project,
+    /// starting from their latest snapshot
+    /// ID or from a provided ID/name.
+    Run {
+        /// Name of this
+        /// merge run
+        name: String,
+        /// Target context
+        /// for the merge run
+        #[arg(short, long)]
+        from: String,
+        /// Snapshot ID or name
+        /// from the current project
+        #[arg(short, long, default_value = None)]
+        our_snapshot: Option<String>,
+        /// Snapshot ID or name
+        /// for the incoming merge
+        #[arg(short, long, default_value = None)]
+        their_snapshot: Option<String>,
+    },
+
+    /// After resolving conflicts where possible,
+    /// pick a version of the conflicting
+    /// file (theirs or ours)
+    Pick {
+        /// Name of the merge
+        /// operation this pick
+        /// refers to
+        name: String,
+        /// For this path,
+        /// pick our conflicting
+        /// version (can be used for
+        /// multiple paths).
+        #[arg(short, long)]
+        our: Vec<String>,
+        /// For this path,
+        /// pick their conflicting
+        /// version (can be used for
+        /// multiple paths).
+        #[arg(short, long)]
+        their: Vec<String>,
+    },
+
+    /// After picking the
+    /// conflicting versions
+    /// for the merge, finalize
+    /// it
+    End {
+        /// Name of the merge
+        /// to finalize
+        name: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 enum SnapCommands {
-    /// Take a full snapshot of the repository
+    /// Take a full snapshot of the project
     Full {
         /// Name of the snapshot
         #[arg(long, short)]
@@ -79,7 +146,7 @@ enum SnapCommands {
         file: Vec<String>,
     },
     /// Create a snapshot from specific files instead
-    /// of the full repository
+    /// of the full project
     From {
         /// Name of the snapshot
         #[arg(long, short)]
@@ -105,14 +172,6 @@ enum Commands {
     Snap {
         #[command(subcommand)]
         cmd: SnapCommands,
-    },
-    /// Initialize ver (globally or for a specific context).
-    Init {
-        /// Initialize ver globally. If not provided, it will
-        /// try to initializa the repository associated
-        /// with the current context\
-        #[arg(long, short, default_value_t = false)]
-        global: bool,
     },
     /// Display the snapshots history associated with the current
     /// context
@@ -188,6 +247,16 @@ enum Commands {
         target: String,
         #[arg(short, long, default_value_t = false)]
         from_scratch: bool,
+    },
+    /// Merge two contexts
+    /// associated with the same
+    /// project.
+    /// Assumes the snapshot
+    /// history of the contexts
+    /// diverged: if not, use `sync`.
+    Merge {
+        #[command(subcommand)]
+        merge_cmd: MergeCommands,
     },
 }
 
@@ -267,6 +336,15 @@ fn main() -> Result<(), VerError> {
                 println!("{}", serde_json::to_string_pretty(&ctx)?);
                 Ok(())
             }
+            ContextCommands::Init { global } => {
+                init(global)?;
+                if global {
+                    println!("Successfully initialized ver globally");
+                } else {
+                    println!("Successfully initialized ver for the current context");
+                }
+                Ok(())
+            }
         },
         Commands::Snap { cmd: cmd_snap } => match cmd_snap {
             SnapCommands::Full { name, description } => {
@@ -307,15 +385,6 @@ fn main() -> Result<(), VerError> {
                 )
             }
         },
-        Commands::Init { global } => {
-            init(global)?;
-            if global {
-                println!("Successfully initialized ver globally");
-            } else {
-                println!("Successfully initialized ver for the current context");
-            }
-            Ok(())
-        }
         Commands::Log {
             limit,
             incomplete_ok,
@@ -368,5 +437,54 @@ fn main() -> Result<(), VerError> {
             let mut lock = stdout.lock();
             sync(source, target, from_scratch, &mut lock)
         }
+        Commands::Merge { merge_cmd } => match merge_cmd {
+            MergeCommands::Run {
+                name,
+                from,
+                our_snapshot,
+                their_snapshot,
+            } => {
+                let pager = minus::Pager::new();
+                let mut stderr = PagerWriter::new(pager);
+                let stdout = io::stdout();
+                let mut lock = stdout.lock();
+                merge_run(
+                    from,
+                    &name,
+                    our_snapshot,
+                    their_snapshot,
+                    &mut lock,
+                    &mut stderr,
+                )?;
+                minus::page_all(stderr.pager).map_err(|e| e.into())
+            }
+            MergeCommands::Pick { name, our, their } => {
+                let stderr = io::stderr();
+                let mut errlock = stderr.lock();
+                let stdout = io::stdout();
+                let mut lock = stdout.lock();
+                merge_pick(
+                    &name,
+                    our.iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<&str>>()
+                        .as_slice(),
+                    their
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<&str>>()
+                        .as_slice(),
+                    &mut lock,
+                    &mut errlock,
+                )
+            }
+            MergeCommands::End { name } => {
+                let stderr = io::stderr();
+                let mut errlock = stderr.lock();
+                let stdout = io::stdout();
+                let mut lock = stdout.lock();
+                merge_end(&name, &mut lock, &mut errlock)
+            }
+        },
     }
 }

@@ -5,6 +5,7 @@ pub enum KVError {
     Put(String),
     Get(String),
     Copy(String),
+    Delete(String),
 }
 
 impl Display for KVError {
@@ -12,6 +13,7 @@ impl Display for KVError {
         match self {
             Self::Get(s) => write!(f, "GET error: {}", s),
             Self::Put(s) => write!(f, "PUT error: {}", s),
+            Self::Delete(s) => write!(f, "DELETE error: {}", s),
             Self::Copy(s) => write!(f, "Copy error: {}", s),
         }
     }
