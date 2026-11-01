@@ -15,5 +15,24 @@ name = "ver"
 path = "src/lib.rs"
 
 [dependencies]
+toml = "1.1.8"
 ver-fs = { path = "../fs", version = "0.1" }
 ver-kv = { path = "../kv", version = "0.1" }
+ver-blobsdb = { path = "../blobsdb", version = "0.1" }
+postcard = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = "7.0.0"
+redb = { workspace = true }
+bytes  = { workspace = true }
+chrono = "0.4.45"
+blake3 = { workspace = true }
+clap = { version = "4.6.7", features = ["derive"] }
+pretty-hex = { version = "0.4.2", optional = true }
+diffy = { version = "0.5.2", features = ["color"] }
+minus = { version = "5.8.0", features = ["static_output"] }
+futures-util = { workspace = true }
+
+[features]
+pretty-hex = ["dep:pretty-hex"]

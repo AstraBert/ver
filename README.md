@@ -1,6 +1,6 @@
 # ver
 
-**A new spring for version control.**
+**A new spring for version control**
 
 > **Alpha release**: expect rough edges, breaking changes, and missing features. Use at your own risk.
 
