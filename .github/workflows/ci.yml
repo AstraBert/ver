@@ -72,30 +72,30 @@ jobs:
       - name: Set up Jake (also sets up Rust)
         uses: AstraBert/setup-jake@v0.1.0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "lts/*"
+      # - name: Setup Node.js
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: "lts/*"
 
-      - name: Install azurite
-        run: npm i -g azurite
+      # - name: Install azurite
+      #   run: npm i -g azurite
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 1.25
+      # - name: Set up Go
+      #   uses: actions/setup-go@v5
+      #   with:
+      #     go-version: 1.25
 
-      - name: Install go tools
-        run: |
-            go install github.com/minio/mc@latest && go install github.com/minio/minio@latest && go install github.com/fsouza/fake-gcs-server@latest
+      # - name: Install go tools
+      #   run: |
+      #       go install github.com/minio/mc@latest && go install github.com/minio/minio@latest && go install github.com/fsouza/fake-gcs-server@latest
 
-      - name: Install az CLI (Ubuntu)
-        if: runner.os == 'Linux'
-        run: curl -fsSL 'https://azurecliprod.blob.core.windows.net/$root/deb_install.sh' | sudo bash
+      # - name: Install az CLI (Ubuntu)
+      #   if: runner.os == 'Linux'
+      #   run: curl -fsSL 'https://azurecliprod.blob.core.windows.net/$root/deb_install.sh' | sudo bash
 
-      - name: Install az CLI (macOS)
-        if: runner.os == 'macOS'
-        run: brew install azure-cli
+      # - name: Install az CLI (macOS)
+      #   if: runner.os == 'macOS'
+      #   run: brew install azure-cli
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -136,25 +136,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "lts/*"
+      # - name: Setup Node.js
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: "lts/*"
 
-      - name: Install azurite
-        run: npm i -g azurite
+      # - name: Install azurite
+      #   run: npm i -g azurite
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 1.25
+      # - name: Set up Go
+      #   uses: actions/setup-go@v5
+      #   with:
+      #     go-version: 1.25
 
-      - name: Install go tools
-        run: |
-            go install github.com/minio/mc@latest && go install github.com/minio/minio@latest && go install github.com/fsouza/fake-gcs-server@latest
+      # - name: Install go tools
+      #   run: |
+      #       go install github.com/minio/mc@latest && go install github.com/minio/minio@latest && go install github.com/fsouza/fake-gcs-server@latest
 
-      - name: Install az CLI
-        run: winget install --accept-source-agreements --accept-package-agreements --silent --exact --id Microsoft.AzureCLI
+      # - name: Install az CLI
+      #   run: winget install --accept-source-agreements --accept-package-agreements --silent --exact --id Microsoft.AzureCLI
 
       - name: Run tests
         run: cargo test --release
