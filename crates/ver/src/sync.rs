@@ -256,7 +256,7 @@ pub fn sync<O: io::Write>(
     let head_to = get_head(&fs_to)?;
     let blobsdb_from = BlobsDBWithFs::new(fs_from.clone());
     let blobsdb_to = BlobsDBWithFs::new(fs_to.clone());
-    if is_from_scratch || head_to.is_none() {
+    if is_from_scratch && head_to.is_none() {
         let _ = writeln!(stdout, "Copying blobs to target context");
         rt().block_on(async { blobsdb_from.copy(&blobsdb_to).await })?;
         let _ = writeln!(stdout, "Copying snapshot history to target context");
@@ -276,6 +276,14 @@ pub fn sync<O: io::Write>(
     }
     let head_from = head_from.unwrap();
     let head_to = head_to.unwrap();
+
+    if head_to == head_from {
+        writeln!(
+            stdout,
+            "The two contexts are already synced to the latest snapshot"
+        )?;
+        return Ok(());
+    }
 
     let (base, delta_from, _) = find_common_ancestor(&kv_from, &kv_to, head_from, head_to)?;
 

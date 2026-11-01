@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, OnceLock, mpsc},
 };
 
+use chrono::{DateTime, NaiveDateTime, Utc};
 use minus::Pager;
 use tokio::runtime::Runtime;
 use ver_fs::{Fs, errors::FsError, noignore_local_disk_walker};
@@ -91,6 +92,11 @@ pub fn write_history(
     Ok(())
 }
 
+fn parse_date(s: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
+    let naive = NaiveDateTime::parse_from_str(s, "%d/%m/%Y %H:%M:%S")?;
+    Ok(naive.and_utc())
+}
+
 pub fn read_history(
     tolerate_incomplete: bool,
     fs: &Arc<dyn Fs>,
@@ -128,9 +134,21 @@ pub fn read_history(
         }
     }
 
-    logs.sort();
-    logs.reverse();
-    Ok((logs, is_incomplete))
+    let mut dates: Vec<(usize, DateTime<Utc>)> = logs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            let parts = s.split("\t").collect::<Vec<&str>>();
+            let dt = parts.first().expect("First element should be the date");
+            let utc = parse_date(dt).expect("Should parse correctly to UTC time");
+            Some((i, utc))
+        })
+        .collect();
+
+    dates.sort_by(|a, b| b.1.cmp(&a.1));
+    let sorted_logs: Vec<String> = dates.iter().map(|(i, _)| logs[*i].to_owned()).collect();
+
+    Ok((sorted_logs, is_incomplete))
 }
 
 pub fn resolve_snapshot_id(identifier: &str, kv: &Arc<dyn KVStore>) -> Result<[u8; 32], VerError> {

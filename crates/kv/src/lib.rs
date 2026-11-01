@@ -188,28 +188,35 @@ impl KVStore for RedbStore {
                 let (chan_tx, chan_rx) =
                     mpsc::sync_channel::<Result<(), KVError>>(BOUNDED_CONCURRENCY);
 
-                #[allow(for_loops_over_fallibles)]
-                for range in snapshots.range_owned::<[u8; 32]>(RangeFull) {
-                    if let Some(Ok(entry)) = range.into_iter().next() {
-                        let (k, v) = entry;
-                        let dest_kv = dest.clone();
-                        let sender = chan_tx.clone();
-                        thread::spawn(move || {
-                            let res = dest_kv.put_snapshot(k.value(), v.value()).map_err(|e| {
-                                KVError::Copy(format!(
-                                    "Error while writing value to the destination KV: {e}"
-                                ))
-                            });
-                            sender.send(res).unwrap();
+                let range = snapshots
+                    .range_owned::<[u8; 32]>(RangeFull)
+                    .map_err(|e| KVError::Copy(format!("Error while opening range: {e}")))?;
+
+                for entry in range {
+                    let (k, v) = match entry {
+                        Ok(kv) => kv,
+                        Err(e) => {
+                            return Err(KVError::Copy(format!("Error while reading entry: {e}")));
+                        }
+                    };
+                    let dest_kv = dest.clone();
+                    let sender = chan_tx.clone();
+                    thread::spawn(move || {
+                        let hash = k.value();
+                        let res = dest_kv.put_snapshot(hash, v.value()).map_err(|e| {
+                            KVError::Copy(format!(
+                                "Error while writing value to the destination KV: {e}"
+                            ))
                         });
-                    }
+                        sender.send(res).unwrap();
+                    });
                 }
 
                 drop(chan_tx);
 
                 for res in chan_rx {
                     match res {
-                        Ok(()) => continue,
+                        Ok(_) => continue,
                         Err(e) => {
                             return Err(KVError::Copy(format!(
                                 "Error while copying snapshots: {e}"
@@ -235,23 +242,23 @@ impl KVStore for RedbStore {
                 let (merges_tx, merges_rx) =
                     mpsc::sync_channel::<Result<(), KVError>>(BOUNDED_CONCURRENCY);
 
-                #[allow(for_loops_over_fallibles)]
-                for range in merges.range_owned::<&str>(RangeFull) {
-                    for entry in range {
-                        let (k, v) = entry.map_err(|e| {
-                            KVError::Copy(format!("Error while listing redb entries: {e}"))
-                        })?;
-                        let dest_kv = dest.clone();
-                        let sender = merges_tx.clone();
-                        thread::spawn(move || {
-                            let res = dest_kv.put_merge(k.value(), v.value()).map_err(|e| {
-                                KVError::Copy(format!(
-                                    "Error while writing value to the destination KV: {e}"
-                                ))
-                            });
-                            sender.send(res).unwrap();
+                let range = merges
+                    .range_owned::<&str>(RangeFull)
+                    .map_err(|e| KVError::Copy(format!("Error while opening range: {e}")))?;
+
+                for entry in range {
+                    let (k, v) = entry
+                        .map_err(|e| KVError::Copy(format!("Error while reading entry: {e}")))?;
+                    let dest_kv = dest.clone();
+                    let sender = merges_tx.clone();
+                    thread::spawn(move || {
+                        let res = dest_kv.put_merge(k.value(), v.value()).map_err(|e| {
+                            KVError::Copy(format!(
+                                "Error while writing value to the destination KV: {e}"
+                            ))
                         });
-                    }
+                        sender.send(res).unwrap();
+                    });
                 }
 
                 drop(merges_tx);
@@ -284,23 +291,23 @@ impl KVStore for RedbStore {
                 let (names_tx, names_rx) =
                     mpsc::sync_channel::<Result<(), KVError>>(BOUNDED_CONCURRENCY);
 
-                #[allow(for_loops_over_fallibles)]
-                for range in names.range_owned::<&str>(RangeFull) {
-                    for entry in range {
-                        let (k, v) = entry.map_err(|e| {
-                            KVError::Copy(format!("Error while listing redb entries: {e}"))
-                        })?;
-                        let dest_kv = dest.clone();
-                        let sender = names_tx.clone();
-                        thread::spawn(move || {
-                            let res = dest_kv.put_name(k.value(), v.value()).map_err(|e| {
-                                KVError::Copy(format!(
-                                    "Error while writing value to the destination KV: {e}"
-                                ))
-                            });
-                            sender.send(res).unwrap();
+                let range = names
+                    .range_owned::<&str>(RangeFull)
+                    .map_err(|e| KVError::Copy(format!("Error while opening range: {e}")))?;
+
+                for entry in range {
+                    let (k, v) = entry
+                        .map_err(|e| KVError::Copy(format!("Error while reading entry: {e}")))?;
+                    let dest_kv = dest.clone();
+                    let sender = names_tx.clone();
+                    thread::spawn(move || {
+                        let res = dest_kv.put_name(k.value(), v.value()).map_err(|e| {
+                            KVError::Copy(format!(
+                                "Error while writing value to the destination KV: {e}"
+                            ))
                         });
-                    }
+                        sender.send(res).unwrap();
+                    });
                 }
 
                 drop(names_tx);

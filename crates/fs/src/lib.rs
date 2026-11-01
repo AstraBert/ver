@@ -1,4 +1,5 @@
 use std::{
+    io,
     path::PathBuf,
     pin::Pin,
     sync::{Arc, mpsc},
@@ -129,15 +130,25 @@ impl Fs for DiskFs {
     }
 
     async fn write(&self, path: &str, data: Bytes) -> Result<(), FsError> {
+        let p = self.prefix_path(path);
+        if !p.exists() && p.parent().is_some_and(|par| !par.exists()) {
+            self.create_dir(&p.parent().unwrap().to_string_lossy())
+                .await?;
+        }
         fs::write(self.prefix_path(path), data)
             .await
             .map_err(|e| FsError::Write(e.to_string()))
     }
 
     async fn delete(&self, path: &str) -> Result<(), FsError> {
-        fs::remove_file(self.prefix_path(path))
-            .await
-            .map_err(|e| FsError::Delete(e.to_string()))
+        let res = fs::remove_file(self.prefix_path(path)).await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(e) => match e.kind() {
+                io::ErrorKind::NotFound => Ok(()),
+                _ => Err(FsError::Delete(format!("Error while deleting file: {e}"))),
+            },
+        }
     }
 
     async fn create_dir(&self, path: &str) -> Result<(), FsError> {
@@ -376,14 +387,20 @@ impl Fs for ObjectStoreFs {
     }
 
     async fn delete(&self, path: &str) -> Result<(), FsError> {
-        self.object_store
+        let res = self
+            .object_store
             .delete(
                 &ObjPath::from_url_path(path)
                     .map_err(|e| FsError::Delete(format!("Invalid object path: {}", e)))?,
             )
-            .await
-            .map_err(|e| FsError::Delete(format!("Delete operation failed: {}", e)))?;
-        Ok(())
+            .await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(e) => match e {
+                object_store::Error::NotFound { path: _, source: _ } => Ok(()),
+                _ => Err(FsError::Delete(format!("Delete operation failed: {e}"))),
+            },
+        }
     }
 
     // no-op, object stores can't create directories
