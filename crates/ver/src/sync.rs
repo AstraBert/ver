@@ -11,7 +11,7 @@ use ver_fs::{Fs, local_disk_walker};
 use ver_kv::KVStore;
 
 use crate::{
-    commons::{HISTORY_PATH, get_head, rt, write_head},
+    commons::{HISTORY_PATH, get_head, read_history, rt, write_head, write_history},
     context::{FilesystemContext, KVStoreContext, read_context},
     errors::VerError,
     snap::Snapshot,
@@ -296,6 +296,21 @@ pub fn sync<O: io::Write>(
         return Err("The target context has added entries to its snapshot history independently from the source context. Please use `merge` instead of `sync`".into());
     }
 
+    let (history_from, _) = read_history(false, &fs_from)?;
+
+    let get_name = |snap_id: [u8; 32]| -> Option<&str> {
+        let snap = blake3::Hash::from_bytes(snap_id).to_string();
+        let hist = history_from
+            .iter()
+            .filter(|s| s.contains(&snap))
+            .map(|s| s.as_str())
+            .collect::<Vec<&str>>();
+        if hist.len() != 1 {
+            return None;
+        }
+        Some(hist.first().unwrap().split("\t").collect::<Vec<&str>>()[2])
+    };
+
     // Go through the list of snapshots
     // that the source context has and the target
     // one doesn't, and copy
@@ -306,6 +321,11 @@ pub fn sync<O: io::Write>(
             blake3::Hash::from_bytes(snap_id)
         );
         copy_snapshot(snap_id, &kv_from, &kv_to, &fs_from, &fs_to)?;
+        // get name from history
+        let name = get_name(snap_id);
+        if let Some(n) = name {
+            write_history(blake3::Hash::from_bytes(snap_id), n, None, &fs_to)?;
+        }
     }
 
     let _ = writeln!(stdout, "Reconstructing head snapshot in target context");

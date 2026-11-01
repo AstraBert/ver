@@ -160,6 +160,7 @@ pub fn resolve_snapshot_id(identifier: &str, kv: &Arc<dyn KVStore>) -> Result<[u
 pub struct PagerWriter {
     pub pager: Pager,
     pub pending: Vec<u8>, // incomplete UTF-8 sequence carried to the next write
+    pub has_writes: bool,
 }
 
 impl PagerWriter {
@@ -167,6 +168,7 @@ impl PagerWriter {
         Self {
             pager,
             pending: Vec::new(),
+            has_writes: false,
         }
     }
 }
@@ -187,6 +189,7 @@ impl io::Write for PagerWriter {
         self.pager.push_str(text).map_err(io::Error::other)?;
         self.pending.drain(..valid_up_to);
 
+        self.has_writes = true;
         Ok(buf.len())
     }
 

@@ -18,7 +18,7 @@ use ver::{
 #[derive(Debug, Subcommand)]
 enum ContextCommands {
     /// Scaffold a new context
-    /// in the `~/.ver/contexts.toml`
+    /// in the ~/.ver/contexts.toml
     /// file.
     Scaffold {
         /// Name of the context
@@ -446,17 +446,22 @@ fn main() -> Result<(), VerError> {
             } => {
                 let pager = minus::Pager::new();
                 let mut stderr = PagerWriter::new(pager);
-                let stdout = io::stdout();
-                let mut lock = stdout.lock();
-                merge_run(
-                    from,
-                    &name,
-                    our_snapshot,
-                    their_snapshot,
-                    &mut lock,
-                    &mut stderr,
-                )?;
-                minus::page_all(stderr.pager).map_err(|e| e.into())
+                {
+                    let stdout = io::stdout();
+                    let mut lock = stdout.lock();
+                    merge_run(
+                        from,
+                        &name,
+                        our_snapshot,
+                        their_snapshot,
+                        &mut lock,
+                        &mut stderr,
+                    )?;
+                } // lock released here
+                if stderr.has_writes {
+                    minus::page_all(stderr.pager)?;
+                }
+                Ok(())
             }
             MergeCommands::Pick { name, our, their } => {
                 let stderr = io::stderr();
