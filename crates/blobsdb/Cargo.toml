@@ -28,6 +28,8 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 async-trait = "0.1"
 futures = "0.3"
 reqwest = "0.13"
+object_store = { workspace = true }
+blake3 = { workspace = true }
 
 [lints.clippy]
 upper_case_acronyms = "allow"

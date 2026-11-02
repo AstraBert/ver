@@ -1,17 +1,25 @@
 use std::{
     any::Any,
+    collections::HashMap,
+    future::Future,
     io,
     str::FromStr,
     sync::{Arc, OnceLock, mpsc},
 };
 
+use blobsdb::{BlobsDBWithFs, MAX_CONCURRENT_OPS};
+use bytes::Bytes;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use minus::Pager;
-use tokio::runtime::Runtime;
-use ver_fs::{Fs, errors::FsError, noignore_local_disk_walker};
+use tokio::{runtime::Runtime, sync::Semaphore};
+use ver_fs::{Fs, errors::FsError, local_disk_walker, noignore_local_disk_walker};
 use ver_kv::KVStore;
 
-use crate::errors::VerError;
+use crate::{
+    context::{FilesystemContext, KVStoreContext, read_context},
+    errors::VerError,
+    snap::Snapshot,
+};
 
 pub const HEAD_PATH: &str = ".ver/head";
 pub const HISTORY_PATH: &str = ".ver/snapshots_history";
@@ -155,6 +163,215 @@ pub fn resolve_snapshot_id(identifier: &str, kv: &Arc<dyn KVStore>) -> Result<[u
             Err(format!("Could not find {identifier} among snapshots").into())
         }
     }
+}
+
+/// Build the filesystem and KV store handles from a context descriptor pair,
+/// failing with a descriptive error when the context is missing.
+pub fn build_context(
+    opt: Option<(FilesystemContext, KVStoreContext)>,
+    context_name: &str,
+) -> Result<(Arc<dyn Fs>, Arc<dyn KVStore>), VerError> {
+    if opt.is_none() {
+        return Err(format!("Context {context_name} not found").into());
+    }
+    let (fs_des, kv_des) = opt.unwrap();
+    let fs = fs_des.build_fs()?;
+    let kv = kv_des.build_kv()?;
+    Ok((fs, kv))
+}
+
+/// Resolve the current context and build its filesystem and KV store handles.
+pub fn current_fs_kv() -> Result<(Arc<dyn Fs>, Arc<dyn KVStore>), VerError> {
+    let ctx = read_context()?;
+    build_context(ctx.current_context(), "current")
+}
+
+/// Load and deserialize a snapshot from the KV store.
+pub fn load_snapshot(kv: &Arc<dyn KVStore>, snapshot_id: [u8; 32]) -> Result<Snapshot, VerError> {
+    let compressed = kv.get_snapshot(snapshot_id)?;
+    if compressed.is_none() {
+        return Err("Could not find the requested snapshot in the KV store".into());
+    }
+    Ok(postcard::from_bytes(&compressed.unwrap())?)
+}
+
+/// Serialize a snapshot, store it in the KV store under its content hash,
+/// and register it under the given name.
+pub fn store_snapshot(
+    snap: &Snapshot,
+    name: &str,
+    kv: &Arc<dyn KVStore>,
+) -> Result<blake3::Hash, VerError> {
+    let compressed = postcard::to_allocvec(snap)?;
+    let id = blake3::hash(&compressed);
+    let bid = id.as_bytes().to_owned();
+    kv.put_snapshot(bid, &compressed)?;
+    kv.put_name(name, bid)?;
+    Ok(id)
+}
+
+/// Serialize a snapshot, store it in the KV store, register it under the
+/// given name, make it the current head and append it to the history.
+pub fn commit_snapshot(
+    snap: &Snapshot,
+    name: &str,
+    description: Option<&str>,
+    fs: &Arc<dyn Fs>,
+    kv: &Arc<dyn KVStore>,
+) -> Result<blake3::Hash, VerError> {
+    let id = store_snapshot(snap, name, kv)?;
+    write_head(id.as_bytes().to_owned(), fs)?;
+    write_history(id, name, description, fs)?;
+    Ok(id)
+}
+
+/// Run `op` over `items` with bounded concurrency, collecting each result.
+///
+/// Every item is processed in its own spawned task guarded by a semaphore
+/// capped at [`MAX_CONCURRENT_OPS`]. Results are collected and returned in
+/// the same order as the input items.
+pub fn run_concurrent<I, T, F, Fut>(items: Vec<I>, op: F) -> Result<Vec<T>, VerError>
+where
+    I: Send + 'static,
+    T: Send + 'static,
+    F: Fn(I) -> Fut,
+    Fut: Future<Output = T> + Send + 'static,
+{
+    let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_OPS));
+    let (tx, rx) = mpsc::channel::<(usize, T)>();
+
+    for (i, item) in items.into_iter().enumerate() {
+        let permit = rt().block_on(async {
+            sem.clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| format!("Error while trying to acquire semaphore: {e}"))
+        })?;
+        let tx = tx.clone();
+        let fut = op(item);
+        rt().spawn(async move {
+            let _permit = permit;
+            let res = fut.await;
+            let _ = tx.send((i, res));
+        });
+    }
+
+    drop(tx);
+
+    let mut collected: HashMap<usize, T> = HashMap::new();
+    for (i, res) in rx {
+        collected.insert(i, res);
+    }
+
+    let mut keys: Vec<usize> = collected.keys().copied().collect();
+    keys.sort_unstable();
+    let mut results = Vec::with_capacity(keys.len());
+    for k in keys {
+        results.push(collected.remove(&k).unwrap());
+    }
+
+    Ok(results)
+}
+
+/// Reconstruct the working tree described by `snapshot` on `fs`.
+///
+/// Files present in the snapshot are written from the blob store. Files
+/// listed in `paths` (or every file on disk when `paths` is empty) that are
+/// missing from the snapshot are deleted when the snapshot is full (not
+/// partial) and `delete_if_not_in_snapshot` holds.
+/// Returns the list of paths that failed to be deleted and the list of
+/// paths that failed to be reconstructed.
+pub fn reconstruct_snapshot(
+    snapshot: Snapshot,
+    db: &BlobsDBWithFs,
+    fs: &Arc<dyn Fs>,
+    paths: Vec<String>,
+    delete_if_not_in_snapshot: bool,
+) -> Result<(Vec<String>, Vec<String>), VerError> {
+    let mut paths: Vec<String> = if !paths.is_empty() {
+        paths
+    } else {
+        rt().block_on(async { fs.list("", Some(Box::new(local_disk_walker))).await })?
+            .map(|e| e.path().to_string_lossy().into_owned())
+            .collect()
+    };
+
+    let wsem = Arc::new(Semaphore::new(MAX_CONCURRENT_OPS));
+    let dsem = Arc::new(Semaphore::new(MAX_CONCURRENT_OPS));
+    let (wtx, wrx) = mpsc::channel::<Result<(), (String, String)>>();
+    let (dtx, drx) = mpsc::channel::<Result<(), (String, String)>>();
+
+    for (path, chunks) in snapshot.repository_state {
+        let idx = paths.iter().position(|a| a == &path);
+        let permit = rt().block_on(async {
+            wsem.clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| format!("Could not acquire writing semaphore: {e}"))
+        })?;
+        let db = db.clone();
+        let fs = fs.clone();
+        let wtx = wtx.clone();
+        let chunks = Arc::new(chunks.clone());
+        rt().spawn(async move {
+            let _permit = permit;
+            let res = db
+                .get(chunks)
+                .await
+                .map_err(|e| (e.to_string(), path.clone()));
+            match res {
+                Ok(c) => {
+                    let new = fs
+                        .write(&path, Bytes::from_owner(c))
+                        .await
+                        .map_err(|e| (e.to_string(), path));
+                    wtx.send(new).unwrap()
+                }
+                Err(e) => wtx.send(Err(e)).unwrap(),
+            }
+        });
+        if let Some(pos) = idx {
+            paths.remove(pos);
+        }
+    }
+
+    if !paths.is_empty() && !snapshot.partial && delete_if_not_in_snapshot {
+        for path in paths {
+            let permit = rt().block_on(async {
+                dsem.clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| format!("Could not acquire deletion semaphore: {e}"))
+            })?;
+            let fs = fs.clone();
+            let dtx = dtx.clone();
+            rt().spawn(async move {
+                let _permit = permit;
+                let res = fs.delete(&path).await.map_err(|e| (e.to_string(), path));
+                dtx.send(res).unwrap()
+            });
+        }
+    }
+
+    drop(wtx);
+    drop(dtx);
+
+    let mut del_failed: Vec<String> = vec![];
+    let mut wrt_failed: Vec<String> = vec![];
+
+    for res in drx {
+        if let Err((_, path)) = res {
+            del_failed.push(path);
+        }
+    }
+
+    for res in wrx {
+        if let Err((_, path)) = res {
+            wrt_failed.push(path);
+        }
+    }
+
+    Ok((del_failed, wrt_failed))
 }
 
 pub struct PagerWriter {

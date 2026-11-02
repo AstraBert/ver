@@ -1,22 +1,21 @@
 use std::{
-    any::Any,
     collections::{HashMap, HashSet},
     io,
     panic::AssertUnwindSafe,
-    sync::{Arc, mpsc},
+    sync::Arc,
 };
 
-use blobsdb::{BlobsDBWithFs, Chunk, MAX_CONCURRENT_OPS};
+use blobsdb::{BlobsDBWithFs, Chunk};
 use bytes::Bytes;
 use futures_util::future::FutureExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Semaphore;
-use ver_fs::Fs;
-use ver_kv::KVStore;
 
 use crate::{
-    commons::{get_head, resolve_snapshot_id, rt, write_head, write_history},
-    context::{FilesystemContext, KVStoreContext, read_context},
+    commons::{
+        build_context, commit_snapshot, current_fs_kv, get_head, panic_msg, resolve_snapshot_id,
+        rt, run_concurrent,
+    },
+    context::read_context,
     errors::VerError,
     show::to_text,
     snap::Snapshot,
@@ -104,16 +103,6 @@ impl From<PartialMerge> for PartialMergeInner {
     }
 }
 
-pub fn panic_msg(p: Box<dyn Any + Send>) -> String {
-    if let Some(s) = p.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = p.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "unknown panic".to_string()
-    }
-}
-
 // get paths in base U ours U theirs
 fn get_union_paths<'a>(
     base: &'a Snapshot,
@@ -150,55 +139,42 @@ fn fetch_conflict_contents(
     blobdb_b: &Arc<blobsdb::BlobsDBWithFs>,
     conflicts: &[(String, Vec<Chunk>, Vec<Chunk>, Vec<Chunk>)], // (path, base_chunks, our_chunks, their_chunks)
 ) -> Result<HashMap<String, (Vec<u8>, Vec<u8>, Vec<u8>)>, VerError> {
-    let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_OPS));
-    let (tx, rx) = mpsc::channel::<(usize, Result<(Vec<u8>, Vec<u8>, Vec<u8>), String>)>();
+    let jobs: Vec<(Vec<Chunk>, Vec<Chunk>, Vec<Chunk>)> = conflicts
+        .iter()
+        .map(|(_, base_chunks, our_chunks, their_chunks)| {
+            (base_chunks.clone(), our_chunks.clone(), their_chunks.clone())
+        })
+        .collect();
 
-    for (i, (_, base_chunks, our_chunks, their_chunks)) in conflicts.iter().enumerate() {
-        let tx = tx.clone();
-        let permit = rt()
-            .block_on(Arc::clone(&sem).acquire_owned())
-            .expect("semaphore closed");
+    let results = run_concurrent(jobs, {
         let db_a = blobdb_a.clone();
         let db_b = blobdb_b.clone();
-        let base_chunks = Arc::new(base_chunks.clone());
-        let our_chunks = Arc::new(our_chunks.clone());
-        let their_chunks = Arc::new(their_chunks.clone());
-
-        rt().spawn(async move {
-            let _permit = permit;
-            let res = match AssertUnwindSafe(async move {
-                let (base, our, their) = tokio::try_join!(
-                    db_a.get(base_chunks),
-                    db_a.get(our_chunks),
-                    db_b.get(their_chunks),
-                )?;
-                Ok::<_, String>((base, our, their))
-            })
-            .catch_unwind()
-            .await
-            {
-                Ok(r) => r,
-                Err(payload) => Err(panic_msg(payload)),
-            };
-            let _ = tx.send((i, res));
-        });
-    }
-
-    drop(tx);
-
-    let mut out: Vec<Option<_>> = (0..conflicts.len()).map(|_| None).collect();
-    for (i, res) in rx {
-        out[i] = Some(res);
-    }
-    let results = out
-        .into_iter()
-        .map(|slot| slot.unwrap_or(Err("Lost conflict content".to_string())))
-        .collect::<Vec<Result<(Vec<u8>, Vec<u8>, Vec<u8>), String>>>();
+        move |(base_chunks, our_chunks, their_chunks)| {
+            let db_a = db_a.clone();
+            let db_b = db_b.clone();
+            async move {
+                match AssertUnwindSafe(async move {
+                    let (base, our, their) = tokio::try_join!(
+                        db_a.get(Arc::new(base_chunks)),
+                        db_a.get(Arc::new(our_chunks)),
+                        db_b.get(Arc::new(their_chunks)),
+                    )?;
+                    Ok::<_, String>((base, our, their))
+                })
+                .catch_unwind()
+                .await
+                {
+                    Ok(r) => r,
+                    Err(payload) => Err(panic_msg(payload)),
+                }
+            }
+        }
+    })?;
 
     let mut map = HashMap::new();
-    for (i, r) in results.into_iter().enumerate() {
+    for (conflict, r) in conflicts.iter().zip(results) {
         let content = r.map_err(VerError::from)?;
-        map.insert(conflicts[i].0.clone(), content);
+        map.insert(conflict.0.clone(), content);
     }
 
     Ok(map)
@@ -211,53 +187,34 @@ fn write_merged_files(
     blobdb_b: &Arc<blobsdb::BlobsDBWithFs>,
     merge_state: &[(String, Vec<Chunk>, bool)],
 ) -> Result<(), VerError> {
-    let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_OPS));
-    let (tx, rx) = mpsc::channel::<(usize, Result<Vec<u8>, String>)>();
+    let jobs: Vec<(Vec<Chunk>, bool)> = merge_state
+        .iter()
+        .map(|(_, chunks, is_ours)| (chunks.clone(), *is_ours))
+        .collect();
 
-    for (i, (_, chunks, is_ours)) in merge_state.iter().enumerate() {
-        let tx = tx.clone();
-        let permit = rt()
-            .block_on(Arc::clone(&sem).acquire_owned())
-            .expect("semaphore closed");
-        let db = if *is_ours {
-            blobdb_a.clone()
-        } else {
-            blobdb_b.clone()
-        };
-        let chunks = Arc::new(chunks.clone());
-
-        rt().spawn(async move {
-            let _permit = permit;
-            let res = match AssertUnwindSafe(async move { db.get(chunks).await })
-                .catch_unwind()
-                .await
-            {
-                Ok(r) => r,
-                Err(payload) => Err(panic_msg(payload)),
-            };
-            let _ = tx.send((i, res));
-        });
-    }
-
-    drop(tx);
-
-    let mut out: Vec<Option<_>> = (0..merge_state.len()).map(|_| None).collect();
-    for (i, res) in rx {
-        out[i] = Some(res);
-    }
-    let results = out
-        .into_iter()
-        .map(|slot| slot.unwrap_or(Err("Lost merged file".to_string())))
-        .collect::<Vec<Result<Vec<u8>, String>>>();
+    let results = run_concurrent(jobs, {
+        let db_a = blobdb_a.clone();
+        let db_b = blobdb_b.clone();
+        move |(chunks, is_ours)| {
+            let db = if is_ours { db_a.clone() } else { db_b.clone() };
+            async move {
+                match AssertUnwindSafe(async move { db.get(Arc::new(chunks)).await })
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(payload) => Err(panic_msg(payload)),
+                }
+            }
+        }
+    })?;
 
     // Write files serially (fs::write is fast, no need for concurrency)
     // and collect paths that need to be re-put into blobdb_a
-
     let mut paths_to_put: Vec<&str> = vec![];
     rt().block_on(async {
-        for (i, r) in results.into_iter().enumerate() {
+        for ((path, _, is_ours), r) in merge_state.iter().zip(results) {
             let content = r.map_err(VerError::from)?;
-            let (path, _, is_ours) = &merge_state[i];
             blobdb_a.fs.write(path, Bytes::from_owner(content)).await?;
             if !is_ours {
                 paths_to_put.push(path);
@@ -267,44 +224,37 @@ fn write_merged_files(
     })?;
 
     // Concurrently put files from the other repo into our blob store
-    if !paths_to_put.is_empty() {
-        let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_OPS));
-        let (tx, rx) = mpsc::channel::<(usize, Result<Vec<Chunk>, String>)>();
+    put_paths(blobdb_a, &paths_to_put)?;
+    Ok(())
+}
 
-        for (i, path) in paths_to_put.iter().enumerate() {
-            let tx = tx.clone();
-            let permit = rt()
-                .block_on(Arc::clone(&sem).acquire_owned())
-                .expect("semaphore closed");
-            let db = blobdb_a.clone();
-            let path = path.to_string();
-
-            rt().spawn(async move {
-                let _permit = permit;
-                let res = match AssertUnwindSafe(async move { db.put(&path).await })
+/// Concurrently put files from disk into the blob store, returning the
+/// resulting chunks per path (in the same order as `paths`).
+fn put_paths(
+    blobdb: &Arc<blobsdb::BlobsDBWithFs>,
+    paths: &[&str],
+) -> Result<Vec<Vec<Chunk>>, VerError> {
+    let jobs: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+    let results = run_concurrent(jobs, {
+        let db = blobdb.clone();
+        move |path| {
+            let db = db.clone();
+            async move {
+                match AssertUnwindSafe(async move { db.put(&path).await })
                     .catch_unwind()
                     .await
                 {
                     Ok(r) => r,
                     Err(payload) => Err(panic_msg(payload)),
-                };
-                let _ = tx.send((i, res));
-            });
+                }
+            }
         }
+    })?;
 
-        drop(tx);
-
-        let mut out: Vec<Option<_>> = (0..paths_to_put.len()).map(|_| None).collect();
-        for (i, res) in rx {
-            out[i] = Some(res);
-        }
-        for slot in out {
-            slot.unwrap_or(Err("Lost put result".to_string()))
-                .map_err(VerError::from)?;
-        }
-    }
-
-    Ok(())
+    results
+        .into_iter()
+        .map(|r| r.map_err(VerError::from))
+        .collect()
 }
 
 /// Concurrently write resolved files to disk and put them into the blob store.
@@ -325,48 +275,14 @@ fn write_resolved_files(
     })?;
 
     // Concurrently put them into the blob store
-    let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_OPS));
-    let (tx, rx) = mpsc::channel::<(usize, Result<Vec<Chunk>, String>)>();
+    let paths: Vec<&str> = resolved_paths.iter().map(|(p, _)| p.as_str()).collect();
+    let chunks = put_paths(blobdb_a, &paths)?;
 
-    for (i, (path, _)) in resolved_paths.iter().enumerate() {
-        let tx = tx.clone();
-        let permit = rt()
-            .block_on(Arc::clone(&sem).acquire_owned())
-            .expect("semaphore closed");
-        let db = blobdb_a.clone();
-        let path = path.clone();
-
-        rt().spawn(async move {
-            let _permit = permit;
-            let res = match AssertUnwindSafe(async move { db.put(&path).await })
-                .catch_unwind()
-                .await
-            {
-                Ok(r) => r,
-                Err(payload) => Err(panic_msg(payload)),
-            };
-            let _ = tx.send((i, res));
-        });
-    }
-
-    drop(tx);
-
-    let mut out: Vec<Option<_>> = (0..resolved_paths.len()).map(|_| None).collect();
-    for (i, res) in rx {
-        out[i] = Some(res);
-    }
-    let results = out
-        .into_iter()
-        .map(|slot| slot.unwrap_or(Err("Lost resolved file put".to_string())))
-        .collect::<Vec<Result<Vec<Chunk>, String>>>();
-
-    let mut entries = vec![];
-    for (i, r) in results.into_iter().enumerate() {
-        let chunks = r.map_err(VerError::from)?;
-        entries.push((resolved_paths[i].0.clone(), chunks));
-    }
-
-    Ok(entries)
+    Ok(resolved_paths
+        .iter()
+        .map(|(p, _)| p.clone())
+        .zip(chunks)
+        .collect())
 }
 
 pub fn merge_run<O: io::Write, E: io::Write>(
@@ -377,22 +293,9 @@ pub fn merge_run<O: io::Write, E: io::Write>(
     std_out: &mut O,
     std_err: &mut E,
 ) -> Result<(), VerError> {
-    let unwrap_ctx = |opt: Option<(FilesystemContext, KVStoreContext)>,
-                      context_name: &str|
-     -> Result<(Arc<dyn Fs>, Arc<dyn KVStore>), VerError> {
-        if opt.is_none() {
-            return Err(format!("Context {context_name} found").into());
-        }
-        let (fs_des, kv_des) = opt.unwrap();
-        let fs = fs_des.build_fs()?;
-        let kv = kv_des.build_kv()?;
-        Ok((fs, kv))
-    };
     let ctx = read_context()?;
-    let opt_ours = ctx.current_context();
-    let opt_theirs = ctx.get_context(&other_context).ok();
-    let (fs_a, kv_a) = unwrap_ctx(opt_ours, "current")?;
-    let (fs_b, kv_b) = unwrap_ctx(opt_theirs, &other_context)?;
+    let (fs_a, kv_a) = current_fs_kv()?;
+    let (fs_b, kv_b) = build_context(ctx.get_context(&other_context).ok(), &other_context)?;
 
     let blobdb_a = Arc::new(BlobsDBWithFs::new(fs_a.clone()));
     let blobdb_b = Arc::new(BlobsDBWithFs::new(fs_b.clone()));
@@ -617,16 +520,9 @@ pub fn merge_run<O: io::Write, E: io::Write>(
                     parent_ids: vec![snapshot_id_a, snapshot_id_b],
                     partial: false,
                 };
-                let to_insert = postcard::to_allocvec(&snap)?;
-                let snap_hash = blake3::hash(&to_insert);
 
-                kv_a.put_snapshot(snap_hash.as_bytes().to_owned(), &to_insert)?;
-                kv_a.put_name(name, snap_hash.as_bytes().to_owned())?;
-
-                write_head(snap_hash.as_bytes().to_owned(), &fs_a)?;
-
-                write_history(
-                    snap_hash,
+                let snap_hash = commit_snapshot(
+                    &snap,
                     name,
                     Some(&format!(
                         "merged repository at {} with {} at snapshot ID {}",
@@ -635,6 +531,7 @@ pub fn merge_run<O: io::Write, E: io::Write>(
                         blake3::Hash::from_bytes(snapshot_id_b)
                     )),
                     &fs_a,
+                    &kv_a,
                 )?;
 
                 writeln!(
@@ -729,13 +626,7 @@ pub fn merge_pick<O: io::Write, E: io::Write>(
     std_out: &mut O,
     std_err: &mut E,
 ) -> Result<(), VerError> {
-    let ctx = read_context()?;
-    let cur_ctx = ctx.current_context();
-    if cur_ctx.is_none() {
-        return Err("No current context found".into());
-    }
-    let (_, kv_des) = cur_ctx.unwrap();
-    let kv = kv_des.build_kv()?;
+    let (_, kv) = current_fs_kv()?;
     let opt = kv.get_merge(name)?;
 
     if let Some(compressed) = opt {
@@ -814,13 +705,7 @@ pub fn merge_end<O: io::Write, E: io::Write>(
     std_err: &mut E,
 ) -> Result<(), VerError> {
     let ctx = read_context()?;
-    let cur_ctx = ctx.current_context();
-    if cur_ctx.is_none() {
-        return Err("No current context found".into());
-    }
-    let (fs_des, kv_des) = cur_ctx.unwrap();
-    let kv_a = kv_des.build_kv()?;
-    let fs_a = fs_des.build_fs()?;
+    let (fs_a, kv_a) = current_fs_kv()?;
     let opt = kv_a.get_merge(name)?;
 
     if let Some(compressed) = opt {
@@ -916,15 +801,9 @@ pub fn merge_end<O: io::Write, E: io::Write>(
             parent_ids: vec![inner.snapshot_id_cur, inner.snapshot_id_inc],
             partial: false,
         };
-        let to_insert = postcard::to_allocvec(&snap)?;
-        let snap_hash = blake3::hash(&to_insert);
 
-        kv_a.put_snapshot(snap_hash.as_bytes().to_owned(), &to_insert)?;
-        kv_a.put_name(name, snap_hash.as_bytes().to_owned())?;
-
-        write_head(snap_hash.as_bytes().to_owned(), &fs_a)?;
-        write_history(
-            snap_hash,
+        let snap_hash = commit_snapshot(
+            &snap,
             name,
             Some(&format!(
                 "merged repository at {} with {:?} at snapshot ID {}",
@@ -933,6 +812,7 @@ pub fn merge_end<O: io::Write, E: io::Write>(
                 blake3::Hash::from_bytes(inner.snapshot_id_inc),
             )),
             &fs_a,
+            &kv_a,
         )?;
 
         kv_a.delete_merge(name)?;

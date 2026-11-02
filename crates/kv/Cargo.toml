@@ -8,3 +8,6 @@ redis = { workspace = true }
 redb = { workspace = true }
 bytes = { workspace = true }
 blake3 = { workspace = true }
+
+[dev-dependencies]
+tempdir = "0.3.7"

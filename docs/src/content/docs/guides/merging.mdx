@@ -1,0 +1,87 @@
+---
+title: Merging
+description: Reconcile two diverged contexts with a three-way merge.
+sidebar:
+  order: 3
+---
+
+When two contexts of the same project have each taken snapshots the other doesn't have, their histories have diverged. `ver merge` reconciles them with a three-way merge against their most recent common ancestor.
+
+## Running a merge
+
+From the context you want to merge **into** (ours):
+
+```sh
+ver merge run my-merge --from other-context
+```
+
+Both sides default to their current heads; pin them explicitly if needed:
+
+```sh
+ver merge run my-merge --from other-context --our-snapshot v12 --their-snapshot v7
+```
+
+ver finds the common ancestor of the two heads, then classifies every path:
+
+| Base | Ours | Theirs | Outcome |
+| --- | --- | --- | --- |
+| present | unchanged | changed | keep theirs |
+| present | changed | unchanged | keep ours |
+| present | changed | changed identically | keep ours |
+| present | changed | changed differently | conflict (three-way text merge attempted) |
+| present | deleted | unchanged | delete |
+| present | unchanged | deleted | delete |
+| present | deleted | changed | conflict |
+| present | changed | deleted | conflict |
+| absent | added | absent | keep ours |
+| absent | absent | added | keep theirs |
+| absent | added | added identically | keep ours |
+| absent | added | added differently | conflict |
+| present | deleted | deleted | delete |
+
+Text files that conflict on modifications get an automatic [diffy](https://github.com/nguyen-vo/diffy-rs) three-way merge attempt; if it resolves cleanly, the merged result is used and noted in the output.
+
+## Clean merges
+
+If nothing conflicts, ver writes the merged files, commits a new snapshot with **two parents**, and prints its ID:
+
+```text
+Merge successfully completed and saved under snapshot my-merge (9f86d08...)
+```
+
+## Conflicted merges
+
+If conflicts remain, ver stores a **partial merge** under the merge name and prints the conflicting paths grouped by kind (deletion-, creation-, and modification-related). Nothing is committed yet.
+
+Resolve each conflict by picking a side:
+
+```sh
+ver merge pick my-merge --our src/main.rs --their README.md
+```
+
+- `--our <path>` keeps your context's version (repeatable);
+- `--their <path>` keeps the incoming context's version.
+
+For deletion conflicts, picking the side where the file still exists keeps it; picking the side where it was deleted deletes it.
+
+<Aside type="note">
+  Decisions are only recorded through `merge pick`. Editing a conflicted file by hand does not resolve its conflict — the merge state still lists it until you pick a side.
+</Aside>
+
+Then finalize:
+
+```sh
+ver merge end my-merge
+```
+
+If any conflict is still unresolved, `merge end` lists what's left and refuses. Otherwise it writes the merged tree, commits the two-parent snapshot, and deletes the partial merge state.
+
+## No common ancestor
+
+If the two contexts share no snapshot history — for example, they were initialized independently — merging is impossible:
+
+```text
+Could not find a common base for the two repositories, merging is not possible
+```
+
+To bring two unrelated contexts together, [sync](/guides/syncing/) one into the other from scratch first, then diverge and merge as needed.

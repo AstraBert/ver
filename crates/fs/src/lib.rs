@@ -2,7 +2,7 @@ use std::{
     io,
     path::PathBuf,
     pin::Pin,
-    sync::{Arc, mpsc},
+    sync::Arc,
 };
 
 use bytes::Bytes;
@@ -335,7 +335,7 @@ impl DirEntry for ObjectStoreEntry {
 
 #[derive(Debug)]
 pub struct ObjectStoreIterator {
-    inner: std::sync::mpsc::IntoIter<ObjectStoreEntry>,
+    inner: std::vec::IntoIter<ObjectStoreEntry>,
 }
 
 impl ObjectStoreIterator {
@@ -409,31 +409,25 @@ impl Fs for ObjectStoreFs {
     }
 
     async fn list(&self, path: &str, _walker_fn: Option<Walker>) -> Result<EntryIter, FsError> {
-        let (tx, rx) = mpsc::sync_channel(1);
-        let handle = tokio::runtime::Handle::current();
-
+        // Collect eagerly: returning a channel-backed iterator fed by a
+        // spawned task would deadlock single-threaded runtimes, where the
+        // blocking `next()` prevents the producer from ever running.
         let stream = self
             .object_store
             .list(Some(&ObjPath::from_url_path(path).map_err(|e| {
                 FsError::Delete(format!("Invalid object path: {}", e))
             })?));
 
-        handle.spawn(async move {
-            let mut stream = Box::pin(stream);
-            while let Some(item) = stream.next().await {
-                if item.is_ok() {
-                    let entry = ObjectStoreEntry::new(item.unwrap().location);
-                    if tx.send(entry).is_err() {
-                        break; // consumer dropped the iterator
-                    }
-                } else {
-                    break; // break on first error
-                }
-            }
-        });
+        let mut entries = Vec::new();
+        let mut stream = Box::pin(stream);
+        while let Some(item) = stream.next().await {
+            let item =
+                item.map_err(|e| FsError::List(format!("Error while listing objects: {e}")))?;
+            entries.push(ObjectStoreEntry::new(item.location));
+        }
 
         Ok(ObjectStoreIterator {
-            inner: rx.into_iter(),
+            inner: entries.into_iter(),
         }
         .into_entry_iter())
     }
@@ -632,7 +626,7 @@ pub fn local_disk_walker(path: &PathBuf, parent: &PathBuf) -> Result<EntryIter, 
 }
 
 pub fn noignore_local_disk_walker(path: &PathBuf, parent: &PathBuf) -> Result<EntryIter, FsError> {
-    let walker = ignore::WalkBuilder::new(path).build();
+    let walker = ignore::WalkBuilder::new(path).hidden(false).build();
 
     let entries: Vec<ignore::DirEntry> = walker
         .filter(|p| {

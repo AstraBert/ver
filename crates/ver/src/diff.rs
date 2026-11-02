@@ -3,11 +3,9 @@ use std::{io, sync::Arc};
 use blobsdb::BlobsDBWithFs;
 
 use crate::{
-    commons::{get_head, resolve_snapshot_id, rt},
-    context::read_context,
+    commons::{current_fs_kv, get_head, load_snapshot, resolve_snapshot_id, rt},
     errors::VerError,
     show::to_text,
-    snap::Snapshot,
 };
 
 pub fn diff<O: io::Write>(
@@ -16,30 +14,15 @@ pub fn diff<O: io::Write>(
     base_snapshot: String,
     stdout: &mut O,
 ) -> Result<(), VerError> {
-    let ctx = read_context()?;
-    let opt = ctx.current_context();
-    if opt.is_none() {
-        return Err("No current context found".into());
-    }
-    let (fs_des, kv_des) = opt.unwrap();
-    let fs = fs_des.build_fs()?;
-    let kv = kv_des.build_kv()?;
+    let (fs, kv) = current_fs_kv()?;
     let head_snapshot_id = if let Some(ref h) = head_snapshot {
         resolve_snapshot_id(h, &kv)?
     } else {
         get_head(&fs)?.expect("The current project has no head")
     };
     let base_snapshot_id = resolve_snapshot_id(&base_snapshot, &kv)?;
-    let base_compressed = kv.get_snapshot(base_snapshot_id)?;
-    if base_compressed.is_none() {
-        return Err("Could not find the requested base snapshot in the KV store".into());
-    }
-    let base_snap: Snapshot = postcard::from_bytes(&base_compressed.unwrap())?;
-    let head_compressed = kv.get_snapshot(head_snapshot_id)?;
-    if head_compressed.is_none() {
-        return Err("Could not find the requested base snapshot in the KV store".into());
-    }
-    let head_snap: Snapshot = postcard::from_bytes(&head_compressed.unwrap())?;
+    let base_snap = load_snapshot(&kv, base_snapshot_id)?;
+    let head_snap = load_snapshot(&kv, head_snapshot_id)?;
 
     let base_chunks = base_snap.repository_state.get(path);
     let head_chunks = head_snap.repository_state.get(path);

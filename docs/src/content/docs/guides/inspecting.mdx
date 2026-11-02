@@ -1,0 +1,43 @@
+---
+title: Inspecting files
+description: Show file contents at a snapshot and diff files across snapshots.
+sidebar:
+  order: 1
+---
+
+## `ver show`
+
+Print a file's content as recorded in a snapshot:
+
+```sh
+ver show src/main.rs                      # at the current head
+ver show src/main.rs --snapshot v1        # at a named snapshot
+ver show src/main.rs -s 9f86d08...        # at a snapshot ID
+```
+
+Text files print as-is; binary files are hex-dumped. For large files, read a byte range:
+
+```sh
+ver show big.bin --offset 1024 --limit 4096
+```
+
+Output is piped through a pager.
+
+## `ver diff`
+
+Unified diff of one file between two snapshots:
+
+```sh
+ver diff src/main.rs --base v1            # v1 -> current head
+ver diff src/main.rs --base v1 --head v2  # v1 -> v2
+```
+
+`--head` defaults to the current head. The output is a standard unified diff with the snapshot names in the file headers.
+
+When the file exists in only one of the two snapshots, `diff` tells you instead of printing a patch:
+
+```text
+Path src/main.rs does not exist in base snapshot, but exists in head
+```
+
+Binary files can't be diffed; if either side isn't text, `ver diff` stays silent for that pair.

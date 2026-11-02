@@ -1,0 +1,53 @@
+---
+title: Introduction
+description: What ver is, who it's for, and where to start.
+sidebar:
+  order: 0
+---
+
+`ver` (from the Latin _ver_, "spring") is an intuitive, easy-to-use, and non git-like version control system. It tracks your files as content-defined chunks, stores them in a content-addressable blob store, and syncs to S3, GCS, or Azure Blob Storage.
+
+<Aside type="caution" title="Alpha release">
+  Expect rough edges, breaking changes, and missing features. Use at your own risk.
+</Aside>
+
+## What you can do
+
+- Snapshot a project with `ver snap full` and restore it with `ver goto` — no staging area, no branches.
+- Keep several **contexts** for the same project (local disk, S3, GCS, Azure) and move snapshots between them with `ver sync`.
+- Merge two diverged copies of a project with a three-way merge and interactive conflict resolution.
+
+## Get started
+
+<Steps>
+  <Step title="Install">
+    ```sh
+    cargo install ver-vcs
+    ```
+  </Step>
+  <Step title="Initialize ver globally">
+    ```sh
+    ver ctx init --global
+    ```
+    This creates `~/.ver/`, where your contexts live.
+  </Step>
+  <Step title="Scaffold a local context">
+    ```sh
+    ver ctx scaffold myproject --fs local --kv embedded
+    ```
+    Then edit `~/.ver/contexts.toml` to fill in the paths, switch to the context with `ver ctx switch myproject`, and run `ver ctx init` inside it.
+  </Step>
+  <Step title="Take a snapshot">
+    ```sh
+    ver snap full --name my-first-snapshot
+    ```
+  </Step>
+</Steps>
+
+## Where to next
+
+- [Concepts](/concepts/) — contexts, snapshots, chunks, and how ver stores your data.
+- [Snapshotting](/guides/snapshotting/) — full and partial snapshots, restoring, history.
+- [Syncing](/guides/syncing/) — replicate a context to another backend.
+- [Merging](/guides/merging/) — reconcile diverged histories.
+- [CLI reference](/reference/cli/) — every command and flag.

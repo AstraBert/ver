@@ -1,18 +1,19 @@
 use std::{
     collections::{HashSet, VecDeque},
     io,
-    sync::{Arc, mpsc},
+    sync::Arc,
 };
 
-use blobsdb::{BLOBSDB_PREFIX, BlobsDBWithFs, MAX_CONCURRENT_OPS};
-use bytes::Bytes;
-use tokio::sync::Semaphore;
-use ver_fs::{Fs, local_disk_walker};
+use blobsdb::{BLOBSDB_PREFIX, BlobsDBWithFs};
+use ver_fs::Fs;
 use ver_kv::KVStore;
 
 use crate::{
-    commons::{HISTORY_PATH, get_head, read_history, rt, write_head, write_history},
-    context::{FilesystemContext, KVStoreContext, read_context},
+    commons::{
+        HISTORY_PATH, build_context, current_fs_kv, get_head, load_snapshot, read_history,
+        reconstruct_snapshot, rt, write_head, write_history,
+    },
+    context::read_context,
     errors::VerError,
     snap::Snapshot,
 };
@@ -21,11 +22,7 @@ pub fn get_parents(
     kv: &Arc<dyn KVStore>,
     snapshot_id: [u8; 32],
 ) -> Result<Vec<[u8; 32]>, VerError> {
-    let compressed = kv.get_snapshot(snapshot_id)?;
-    if compressed.is_none() {
-        return Err("Could not find the requested snapshot".into());
-    }
-    let snap: Snapshot = postcard::from_bytes(&compressed.unwrap())?;
+    let snap = load_snapshot(kv, snapshot_id)?;
     Ok(snap.parent_ids)
 }
 
@@ -95,92 +92,8 @@ pub fn reconstruct_head_snapshot(
     fs: &Arc<dyn Fs>,
     kv: &Arc<dyn KVStore>,
 ) -> Result<(), VerError> {
-    let compressed = kv.get_snapshot(head)?;
-    if compressed.is_none() {
-        return Err("Could not find snapshot in KV store".into());
-    }
-    let snapshot: Snapshot = postcard::from_bytes(&compressed.unwrap())?;
-    let mut paths: Vec<String> = rt()
-        .block_on(async { db.fs.list("", Some(Box::new(local_disk_walker))).await })?
-        .map(|e| e.path().to_string_lossy().into_owned())
-        .collect();
-
-    let wsem = Arc::new(Semaphore::new(MAX_CONCURRENT_OPS));
-    let dsem = Arc::new(Semaphore::new(MAX_CONCURRENT_OPS));
-    let (wtx, wrx) = mpsc::channel::<Result<(), (String, String)>>();
-    let (dtx, drx) = mpsc::channel::<Result<(), (String, String)>>();
-
-    for (path, chunks) in snapshot.repository_state {
-        let idx = paths.iter().position(|a| a == &path);
-        let permit = rt().block_on(async {
-            wsem.clone()
-                .acquire_owned()
-                .await
-                .map_err(|e| format!("Could not acquire writing semaphore: {e}"))
-        })?;
-        let db = db.clone();
-        let fs = fs.clone();
-        let wtx = wtx.clone();
-        let chunks = Arc::new(chunks.clone());
-        rt().spawn(async move {
-            let _permit = permit;
-            let res = db
-                .get(chunks)
-                .await
-                .map_err(|e| (e.to_string(), path.clone()));
-            match res {
-                Ok(c) => {
-                    let new = fs
-                        .write(&path, Bytes::from_owner(c))
-                        .await
-                        .map_err(|e| (e.to_string(), path));
-                    wtx.send(new).unwrap()
-                }
-                Err(e) => wtx.send(Err(e)).unwrap(),
-            }
-        });
-        if let Some(pos) = idx {
-            paths.remove(pos);
-        }
-    }
-
-    if !paths.is_empty() && !snapshot.partial {
-        for path in paths {
-            let permit = rt().block_on(async {
-                dsem.clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|e| format!("Could not acquire deletion semaphore: {e}"))
-            })?;
-            let fs = fs.clone();
-            let dtx = dtx.clone();
-            rt().spawn(async move {
-                let _permit = permit;
-                let res = fs.delete(&path).await.map_err(|e| (e.to_string(), path));
-                dtx.send(res).unwrap()
-            });
-        }
-    }
-
-    drop(wtx);
-    drop(dtx);
-
-    let mut del_failed: Vec<String> = vec![];
-    let mut wrt_failed: Vec<String> = vec![];
-
-    for res in drx {
-        if res.is_err() {
-            let err = res.unwrap_err();
-            del_failed.push(err.1);
-        }
-    }
-
-    for res in wrx {
-        if res.is_err() {
-            let err = res.unwrap_err();
-            wrt_failed.push(err.1);
-        }
-    }
+    let snapshot = load_snapshot(kv, head)?;
+    let (del_failed, wrt_failed) = reconstruct_snapshot(snapshot, db, fs, vec![], true)?;
 
     if !del_failed.is_empty() || !wrt_failed.is_empty() {
         return Err(format!("Failed to delete the following files: {}\nFailed to reconstruct the following files: {}",
@@ -228,25 +141,11 @@ pub fn sync<O: io::Write>(
     stdout: &mut O,
 ) -> Result<(), VerError> {
     let ctx = read_context()?;
-    let opt_from = if from.is_none() {
-        ctx.current_context()
-    } else {
-        ctx.get_context(from.as_deref().unwrap()).ok()
+    let (fs_from, kv_from) = match from {
+        None => current_fs_kv()?,
+        Some(ref name) => build_context(ctx.get_context(name).ok(), name)?,
     };
-    let opt_to = ctx.get_context(&to).ok();
-    let unwrap_ctx = |opt: Option<(FilesystemContext, KVStoreContext)>,
-                      context_name: &str|
-     -> Result<(Arc<dyn Fs>, Arc<dyn KVStore>), VerError> {
-        if opt.is_none() {
-            return Err(format!("Context {context_name} found").into());
-        }
-        let (fs_des, kv_des) = opt.unwrap();
-        let fs = fs_des.build_fs()?;
-        let kv = kv_des.build_kv()?;
-        Ok((fs, kv))
-    };
-    let (fs_from, kv_from) = unwrap_ctx(opt_from, from.as_deref().unwrap_or("current"))?;
-    let (fs_to, kv_to) = unwrap_ctx(opt_to, &to)?;
+    let (fs_to, kv_to) = build_context(ctx.get_context(&to).ok(), &to)?;
     let head_from = get_head(&fs_from)?;
     if head_from.is_none() {
         return Err(

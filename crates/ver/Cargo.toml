@@ -36,3 +36,6 @@ futures-util = { workspace = true }
 
 [features]
 pretty-hex = ["dep:pretty-hex"]
+
+[dev-dependencies]
+tempdir = "0.3.7"

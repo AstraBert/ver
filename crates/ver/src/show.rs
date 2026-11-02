@@ -3,10 +3,8 @@ use std::{io, sync::Arc};
 use blobsdb::BlobsDBWithFs;
 
 use crate::{
-    commons::{get_head, resolve_snapshot_id, rt},
-    context::read_context,
+    commons::{current_fs_kv, get_head, load_snapshot, resolve_snapshot_id, rt},
     errors::VerError,
-    snap::Snapshot,
 };
 
 #[cfg(not(feature = "pretty-hex"))]
@@ -50,24 +48,13 @@ pub fn show_file<O: io::Write>(
     limit: Option<usize>,
     stdout: &mut O,
 ) -> Result<(), VerError> {
-    let ctx = read_context()?;
-    let opt = ctx.current_context();
-    if opt.is_none() {
-        return Err("No current context found".into());
-    }
-    let (fs_des, kv_des) = opt.unwrap();
-    let fs = fs_des.build_fs()?;
-    let kv = kv_des.build_kv()?;
+    let (fs, kv) = current_fs_kv()?;
     let snap_id = if let Some(id) = snapshot_id {
         resolve_snapshot_id(&id, &kv)?
     } else {
         get_head(&fs)?.expect("The current project has no head")
     };
-    let compressed = kv.get_snapshot(snap_id)?;
-    if compressed.is_none() {
-        return Err("Could not find the requested snapshot in the KV store".into());
-    }
-    let snap: Snapshot = postcard::from_bytes(&compressed.unwrap())?;
+    let snap = load_snapshot(&kv, snap_id)?;
     let db = BlobsDBWithFs::new(fs.clone());
     if let Some(chunks) = snap.repository_state.get(path) {
         let chunks = Arc::new(chunks.clone());

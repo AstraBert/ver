@@ -1,19 +1,16 @@
 use std::io::Write;
 
-use crate::{commons::read_history, context::read_context, errors::VerError};
+use crate::{
+    commons::{current_fs_kv, read_history},
+    errors::VerError,
+};
 
 pub fn log<O: Write>(
     tolerate_incomplete: bool,
     limit: Option<usize>,
     stdout: &mut O,
 ) -> Result<(), VerError> {
-    let ctx = read_context()?;
-    let opt = ctx.current_context();
-    if opt.is_none() {
-        return Err("No context is currently in use".into());
-    }
-    let (fs_des, _) = opt.unwrap();
-    let fs = fs_des.build_fs()?;
+    let (fs, _) = current_fs_kv()?;
     let (mut logs, is_incomplete) = read_history(tolerate_incomplete, &fs)?;
     if let Some(l) = limit {
         logs.truncate(l);

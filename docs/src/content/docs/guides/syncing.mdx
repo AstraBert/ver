@@ -1,0 +1,77 @@
+---
+title: Syncing
+description: Replicate snapshots from one context to another.
+sidebar:
+  order: 2
+---
+
+`ver sync` copies snapshots from a source context to a target context. The source defaults to the current context.
+
+```sh
+ver sync --target backups
+ver sync --source laptop --target s3-remote
+```
+
+Both contexts must already exist in `~/.ver/contexts.toml`.
+
+## From scratch
+
+The first time you push a project to an empty target:
+
+```sh
+ver sync --target backups --from-scratch
+```
+
+This bulk-copies the whole blob store, the snapshot history, and every KV entry, then reconstructs the head snapshot's files in the target and writes its head pointer.
+
+`--from-scratch` requires the target to have **no head**. If it has one, ver falls through to the delta path below.
+
+## Delta sync
+
+Without `--from-scratch`, sync walks the snapshot graph from both heads to find their common ancestor:
+
+- If the heads are equal, the contexts are already synced and nothing happens.
+- If the target's head is an ancestor of the source's head, ver copies exactly the snapshots the target is missing (with their blob chunks and history entries), reconstructs the new head in the target, and updates its head pointer.
+- If the target has snapshots the source doesn't, the histories have **diverged** — sync refuses and tells you to [merge](/guides/merging/) instead.
+
+```text
+The target context has added entries to its snapshot history independently
+from the source context. Please use `merge` instead of `sync`
+```
+
+## What gets copied
+
+For each missing snapshot, sync copies:
+
+1. the snapshot's blob chunks (skipping chunks the target already has, since they're content-addressed);
+2. the snapshot's KV entry;
+3. its history entry, with the original name.
+
+## A typical setup
+
+```toml title="~/.ver/contexts.toml"
+current = "laptop"
+
+[fs.laptop]
+base_directory = "/home/me/project"
+
+[kv.laptop]
+redb_path = "/home/me/project/.ver/kv.redb"
+
+[fs.s3-remote]
+access_key_id = "..."
+secret_access_key = "..."
+region = "eu-west-1"
+endpoint = "https://s3.eu-west-1.amazonaws.com"
+bucket = "my-ver-backups"
+
+[kv.s3-remote]
+uri = "redis://my-redis-host:6379"
+```
+
+```sh
+ver ctx switch laptop
+ver snap full --name friday-backup
+ver sync --target s3-remote --from-scratch   # first time
+ver sync --target s3-remote                  # every time after
+```
