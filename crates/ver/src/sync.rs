@@ -124,7 +124,7 @@ pub fn copy_snapshot(
             .collect();
         rt().block_on(async {
             fs_from
-                .copy_files(&fs_to, chunk_files.iter().map(|s| s.as_str()).collect())
+                .copy_files(fs_to, chunk_files.iter().map(|s| s.as_str()).collect())
                 .await
         })?;
     }
@@ -223,6 +223,7 @@ pub fn sync<O: io::Write>(
         // get name from history
         let name = get_name(snap_id);
         if let Some(n) = name {
+            kv_to.put_name(n, snap_id)?;
             write_history(blake3::Hash::from_bytes(snap_id), n, None, &fs_to)?;
         }
     }

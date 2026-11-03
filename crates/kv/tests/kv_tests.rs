@@ -147,8 +147,14 @@ fn copy_moves_all_tables() {
 
     src.copy(&dst_trait).unwrap();
 
-    assert_eq!(dst.get_snapshot(key(1)).unwrap().unwrap().as_ref(), b"snap1");
-    assert_eq!(dst.get_snapshot(key(2)).unwrap().unwrap().as_ref(), b"snap2");
+    assert_eq!(
+        dst.get_snapshot(key(1)).unwrap().unwrap().as_ref(),
+        b"snap1"
+    );
+    assert_eq!(
+        dst.get_snapshot(key(2)).unwrap().unwrap().as_ref(),
+        b"snap2"
+    );
     assert_eq!(dst.get_name("main").unwrap().unwrap(), key(1));
     assert_eq!(dst.get_merge("m1").unwrap().unwrap().as_ref(), b"merge1");
 }
@@ -203,7 +209,10 @@ fn redb_persists_across_reopen() {
     {
         let db = redb::Database::open(&path).unwrap();
         let kv = RedbStore::new(Arc::new(db));
-        assert_eq!(kv.get_snapshot(key(4)).unwrap().unwrap().as_ref(), b"durable");
+        assert_eq!(
+            kv.get_snapshot(key(4)).unwrap().unwrap().as_ref(),
+            b"durable"
+        );
         assert_eq!(kv.get_name("durable").unwrap().unwrap(), key(4));
     }
 }
@@ -308,9 +317,15 @@ fn redis_copy_to_redb() {
 
         // copy scans whole namespaces, so the destination may hold more
         // than our keys on a shared server: assert ours made it over
-        assert_eq!(dst.get_snapshot(snap_key).unwrap().unwrap().as_ref(), b"to-copy");
+        assert_eq!(
+            dst.get_snapshot(snap_key).unwrap().unwrap().as_ref(),
+            b"to-copy"
+        );
         assert_eq!(dst.get_name(&name).unwrap().unwrap(), snap_key);
-        assert_eq!(dst.get_merge(&merge).unwrap().unwrap().as_ref(), b"merge-copy");
+        assert_eq!(
+            dst.get_merge(&merge).unwrap().unwrap().as_ref(),
+            b"merge-copy"
+        );
     });
 }
 
@@ -328,9 +343,15 @@ fn redb_copy_to_redis() {
         let dst_trait: Arc<dyn KVStore> = kv.clone();
         src.copy(&dst_trait).unwrap();
 
-        assert_eq!(kv.get_snapshot(snap_key).unwrap().unwrap().as_ref(), b"from-redb");
+        assert_eq!(
+            kv.get_snapshot(snap_key).unwrap().unwrap().as_ref(),
+            b"from-redb"
+        );
         assert_eq!(kv.get_name(&name).unwrap().unwrap(), snap_key);
-        assert_eq!(kv.get_merge(&merge).unwrap().unwrap().as_ref(), b"merge-from-redb");
+        assert_eq!(
+            kv.get_merge(&merge).unwrap().unwrap().as_ref(),
+            b"merge-from-redb"
+        );
 
         // cleanup: merges are plain keys we can delete
         kv.delete_merge(&merge).unwrap();

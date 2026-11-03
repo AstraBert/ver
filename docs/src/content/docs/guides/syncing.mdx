@@ -32,7 +32,7 @@ Without `--from-scratch`, sync walks the snapshot graph from both heads to find 
 
 - If the heads are equal, the contexts are already synced and nothing happens.
 - If the target's head is an ancestor of the source's head, ver copies exactly the snapshots the target is missing (with their blob chunks and history entries), reconstructs the new head in the target, and updates its head pointer.
-- If the target has snapshots the source doesn't, the histories have **diverged** — sync refuses and tells you to [merge](/guides/merging/) instead.
+- If the target has snapshots the source doesn't, the histories have **diverged**. Sync refuses and tells you to [merge](/guides/merging/) instead.
 
 ```text
 The target context has added entries to its snapshot history independently

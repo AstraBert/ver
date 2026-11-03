@@ -41,7 +41,7 @@ pub fn diff<O: io::Write>(
                 (Some(bt), Some(ht)) => {
                     let head_label = head_snapshot.as_deref().unwrap_or("HEAD");
                     let patch = diffy::DiffOptions::new()
-                        .set_original_filename(format!("{} ({})", path, &base_snapshot))
+                        .set_original_filename(format!("{} ({})", path, base_snapshot))
                         .set_modified_filename(format!("{} ({})", path, head_label))
                         .create_patch(bt, ht);
 

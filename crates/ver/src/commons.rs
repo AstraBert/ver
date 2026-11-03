@@ -114,7 +114,7 @@ pub fn read_history(
             .await
     })?;
     let (tx, rx) = mpsc::sync_channel(MAX_CONCURRENT_LOG_READS);
-    while let Some(entry) = it.next() {
+    for entry in it {
         let fs = fs.clone();
         let tx = tx.clone();
         let path = entry.path();
@@ -139,7 +139,7 @@ pub fn read_history(
                 let s = String::from_utf8_lossy(&bts).to_string();
                 let parts = s.split("\t").collect::<Vec<&str>>();
                 let dt = parts.first().expect("Should have at least 3 parts");
-                let utc = parse_date(&dt).expect("First part should be a date");
+                let utc = parse_date(dt).expect("First part should be a date");
                 logs.push((s, utc));
             }
         }

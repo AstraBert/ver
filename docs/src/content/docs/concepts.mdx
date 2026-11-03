@@ -11,8 +11,8 @@ ver organizes everything around three ideas: **contexts**, **snapshots**, and **
 
 A context is a named pairing of:
 
-- a **filesystem backend** — where blob chunks, the head pointer, and the snapshot history are stored;
-- a **KV backend** — where snapshot metadata, snapshot names, and in-progress merges live.
+- a **filesystem backend**, where blob chunks, the head pointer, and the snapshot history are stored;
+- a **KV backend**, where snapshot metadata, snapshot names, and in-progress merges live.
 
 Contexts are declared in `~/.ver/contexts.toml`. One of them is marked `current`; every ver command operates on the current context unless told otherwise.
 
@@ -30,19 +30,19 @@ Contexts are declared in `~/.ver/contexts.toml`. One of them is marked `current`
 
 Two validation rules matter:
 
-- An **embedded KV can only pair with a local filesystem** — a redb file on your laptop makes no sense for blobs in a bucket. Remote filesystems need Redis.
+- An **embedded KV can only pair with a local filesystem**. A redb file on your laptop makes no sense for blobs in a bucket, so remote filesystems need Redis.
 - Local `base_directory` and `redb_path` must be **absolute paths**.
 
-Because contexts are just backend pairings, two contexts can point at *the same project* through different storage — that's what makes [sync](/guides/syncing/) and [merge](/guides/merging/) possible.
+Because contexts are just backend pairings, two contexts can point at *the same project* through different storage. That is what makes [sync](/guides/syncing/) and [merge](/guides/merging/) possible.
 
 ## Snapshots
 
 A snapshot is a map from file paths to lists of chunks, plus:
 
-- `parent_ids` — the snapshots it descends from (one for a normal snapshot, two for a merge);
-- `partial` — whether it describes the whole project or only some files.
+- `parent_ids`: the snapshots it descends from (one for a normal snapshot, two for a merge);
+- `partial`: whether it describes the whole project or only some files.
 
-Snapshots are serialized and stored in the KV backend under their content hash, so a snapshot's ID *is* its BLAKE3 hash. Names (`my-first-snapshot`) are just pointers to IDs — you can use either interchangeably on the CLI.
+Snapshots are serialized and stored in the KV backend under their content hash, so a snapshot's ID *is* its BLAKE3 hash. Names (`my-first-snapshot`) are just pointers to IDs, and you can use either interchangeably on the CLI.
 
 The **head** pointer (`.ver/head` in the filesystem backend) records which snapshot the project currently sits on.
 
@@ -51,7 +51,7 @@ The **head** pointer (`.ver/head` in the filesystem backend) records which snaps
 When you snapshot a file, ver:
 
 1. Splits it with **FastCDC** content-defined chunking (64 KiB min, 256 KiB average, 1 MiB max). Chunk boundaries depend on content, not position, so editing the middle of a file only changes the chunks around the edit.
-2. Hashes each chunk with **BLAKE3** — the hash is the chunk's address in the blob store.
+2. Hashes each chunk with **BLAKE3**. The hash is the chunk's address in the blob store.
 3. Compresses each chunk with **zstd** and writes it to `.ver/blobsdb/<hash>`.
 
 Identical content is never stored twice, within one file or across the whole project.

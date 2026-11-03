@@ -1,9 +1,4 @@
-use std::{
-    io,
-    path::PathBuf,
-    pin::Pin,
-    sync::Arc,
-};
+use std::{io, path::PathBuf, pin::Pin, sync::Arc};
 
 use bytes::Bytes;
 use futures_util::stream::StreamExt;
@@ -214,7 +209,7 @@ impl Fs for DiskFs {
         let mut join_set = JoinSet::<Result<(), (FsError, String)>>::new();
         let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_COPIES));
 
-        while let Some(entry) = iterator.next() {
+        for entry in iterator {
             let permit = sem
                 .clone()
                 .acquire_owned()
@@ -250,7 +245,7 @@ impl Fs for DiskFs {
             }
         }
 
-        if failed.len() > 0 {
+        if !failed.is_empty() {
             return Err(FsError::Copy(format!(
                 "Failed to copy the following paths: {}",
                 failed.join(", ")
@@ -294,7 +289,7 @@ impl Fs for DiskFs {
             }
         }
 
-        if failed.len() > 0 {
+        if !failed.is_empty() {
             return Err(FsError::Copy(format!(
                 "Failed to copy the following paths: {}",
                 failed.join(", ")
@@ -487,7 +482,7 @@ impl Fs for ObjectStoreFs {
         let mut join_set = JoinSet::<Result<(), (FsError, String)>>::new();
         let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_COPIES));
 
-        while let Some(entry) = iterator.next() {
+        for entry in iterator {
             let permit = sem
                 .clone()
                 .acquire_owned()
@@ -523,7 +518,7 @@ impl Fs for ObjectStoreFs {
             }
         }
 
-        if failed.len() > 0 {
+        if !failed.is_empty() {
             return Err(FsError::Copy(format!(
                 "Failed to copy the following paths: {}",
                 failed.join(", ")
@@ -567,7 +562,7 @@ impl Fs for ObjectStoreFs {
             }
         }
 
-        if failed.len() > 0 {
+        if !failed.is_empty() {
             return Err(FsError::Copy(format!(
                 "Failed to copy the following paths: {}",
                 failed.join(", ")

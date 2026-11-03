@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 use ver_fs::local_disk_walker;
 
 use crate::{
-    commons::{
-        commit_snapshot, current_fs_kv, get_head, resolve_snapshot_id, rt, run_concurrent,
-    },
+    commons::{commit_snapshot, current_fs_kv, get_head, resolve_snapshot_id, rt, run_concurrent},
     errors::VerError,
 };
 
@@ -55,10 +53,10 @@ pub fn full_snap<O: io::Write, E: io::Write>(
 ) -> Result<(), VerError> {
     let (fs, kv) = current_fs_kv()?;
     let blobdb = BlobsDBWithFs::new(fs.clone());
-    let files: Vec<String> =
-        rt().block_on(async { fs.list("", Some(Box::new(local_disk_walker))).await })?
-            .map(|e| e.path().to_string_lossy().into_owned())
-            .collect();
+    let files: Vec<String> = rt()
+        .block_on(async { fs.list("", Some(Box::new(local_disk_walker))).await })?
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .collect();
 
     let mut state: HashMap<String, Vec<Chunk>> = HashMap::new();
     let failed = put_files(&blobdb, files, &mut state)?;

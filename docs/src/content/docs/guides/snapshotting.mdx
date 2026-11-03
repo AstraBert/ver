@@ -45,7 +45,7 @@ The snapshot keeps its ID and name; its file map is updated in place. Patching a
 ver goto my-snapshot
 ```
 
-Reconstructs the snapshot's files in the project and moves the head pointer. With a full snapshot, files on disk that aren't in the snapshot are **deleted** — pass `--no-delete` to keep them:
+Reconstructs the snapshot's files in the project and moves the head pointer. With a full snapshot, files on disk that aren't in the snapshot are **deleted**; pass `--no-delete` to keep them:
 
 ```sh
 ver goto my-snapshot --no-delete

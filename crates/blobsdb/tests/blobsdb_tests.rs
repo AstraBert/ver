@@ -222,9 +222,21 @@ fn chunk_serde_roundtrip() {
 fn chunk_equality_and_hash() {
     use std::collections::HashSet;
     use std::hash::{BuildHasher, Hasher};
-    let a = Chunk { offset: 0, length: 1, hash: [1u8; 32] };
-    let b = Chunk { offset: 5, length: 9, hash: [1u8; 32] };
-    let c = Chunk { offset: 0, length: 1, hash: [2u8; 32] };
+    let a = Chunk {
+        offset: 0,
+        length: 1,
+        hash: [1u8; 32],
+    };
+    let b = Chunk {
+        offset: 5,
+        length: 9,
+        hash: [1u8; 32],
+    };
+    let c = Chunk {
+        offset: 0,
+        length: 1,
+        hash: [2u8; 32],
+    };
 
     // Hash impl only considers the content hash: a and b hash identically
     let hasher = std::collections::hash_map::RandomState::new();
@@ -242,5 +254,12 @@ fn chunk_equality_and_hash() {
     assert_eq!(set.len(), 3);
 
     assert_ne!(a, b);
-    assert_eq!(a, Chunk { offset: 0, length: 1, hash: [1u8; 32] });
+    assert_eq!(
+        a,
+        Chunk {
+            offset: 0,
+            length: 1,
+            hash: [1u8; 32]
+        }
+    );
 }

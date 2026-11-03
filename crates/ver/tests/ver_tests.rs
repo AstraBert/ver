@@ -63,15 +63,14 @@ fn setup_repo(name: &str, extra: &[&TestRepo]) -> TestRepo {
 
     let mut ctx = VerContext::default();
     for repo in extra {
-        ctx.scaffold(&repo.name, FSType::Local, KVType::Embedded).unwrap();
+        ctx.scaffold(&repo.name, FSType::Local, KVType::Embedded)
+            .unwrap();
         if let Some(context::FilesystemContext::Local { base_directory }) =
             ctx.fs.get_mut(&repo.name)
         {
             *base_directory = repo.fs_base();
         }
-        if let Some(context::KVStoreContext::Embedded { redb_path }) =
-            ctx.kv.get_mut(&repo.name)
-        {
+        if let Some(context::KVStoreContext::Embedded { redb_path }) = ctx.kv.get_mut(&repo.name) {
             *redb_path = repo.kv_path();
         }
     }
@@ -262,7 +261,10 @@ fn commit_snapshot_sets_head_and_history() {
 
     let id = commit_snapshot(&snap, "c1", Some("desc"), &repo.fs, &repo.kv()).unwrap();
 
-    assert_eq!(get_head(&repo.fs).unwrap().unwrap(), id.as_bytes().to_owned());
+    assert_eq!(
+        get_head(&repo.fs).unwrap().unwrap(),
+        id.as_bytes().to_owned()
+    );
     let (logs, _) = read_history(false, &repo.fs).unwrap();
     assert_eq!(logs.len(), 1);
     assert!(logs[0].contains("c1"));
@@ -270,10 +272,8 @@ fn commit_snapshot_sets_head_and_history() {
 
 #[test]
 fn run_concurrent_preserves_order() {
-    let results = run_concurrent((0..100).collect::<Vec<usize>>(), |i| async move {
-        i * 2
-    })
-    .unwrap();
+    let results =
+        run_concurrent((0..100).collect::<Vec<usize>>(), |i| async move { i * 2 }).unwrap();
     let expected: Vec<usize> = (0..100).map(|i| i * 2).collect();
     assert_eq!(results, expected);
 }
@@ -303,8 +303,7 @@ fn reconstruct_snapshot_writes_files_and_deletes_extras() {
     // remove the file so reconstruction has something to restore
     std::fs::remove_file(repo._dir.path().join("keep.txt")).unwrap();
 
-    let (del_failed, wrt_failed) =
-        reconstruct_snapshot(snap, &db, &repo.fs, vec![], true).unwrap();
+    let (del_failed, wrt_failed) = reconstruct_snapshot(snap, &db, &repo.fs, vec![], true).unwrap();
 
     assert!(del_failed.is_empty());
     assert!(wrt_failed.is_empty());
@@ -328,8 +327,7 @@ fn reconstruct_partial_snapshot_keeps_extra_files() {
         partial: true,
     };
 
-    let (del_failed, wrt_failed) =
-        reconstruct_snapshot(snap, &db, &repo.fs, vec![], true).unwrap();
+    let (del_failed, wrt_failed) = reconstruct_snapshot(snap, &db, &repo.fs, vec![], true).unwrap();
 
     assert!(del_failed.is_empty());
     assert!(wrt_failed.is_empty());
@@ -467,12 +465,16 @@ fn context_validate_rejects_relative_paths() {
 #[test]
 fn context_scaffold_and_get() {
     let mut ctx = VerContext::default();
-    ctx.scaffold("new", FSType::Local, KVType::Embedded).unwrap();
+    ctx.scaffold("new", FSType::Local, KVType::Embedded)
+        .unwrap();
     assert!(ctx.fs.contains_key("new"));
     assert!(ctx.kv.contains_key("new"));
     assert!(ctx.get_context("new").is_ok());
     // duplicate scaffold fails
-    assert!(ctx.scaffold("new", FSType::Local, KVType::Embedded).is_err());
+    assert!(
+        ctx.scaffold("new", FSType::Local, KVType::Embedded)
+            .is_err()
+    );
     // missing context fails
     assert!(ctx.get_context("nope").is_err());
 }
@@ -511,7 +513,10 @@ fn fstype_kvtype_from_str() {
     assert!(matches!(FSType::from_str("gcs").unwrap(), FSType::GCS));
     assert!(FSType::from_str("nope").is_err());
 
-    assert!(matches!(KVType::from_str("embedded").unwrap(), KVType::Embedded));
+    assert!(matches!(
+        KVType::from_str("embedded").unwrap(),
+        KVType::Embedded
+    ));
     assert!(matches!(KVType::from_str("redis").unwrap(), KVType::Redis));
     assert!(KVType::from_str("nope").is_err());
 }
@@ -651,7 +656,15 @@ fn files_snap_creates_partial_snapshot() {
 
     repo.write("one.txt", "1");
     repo.write("two.txt", "2");
-    files_snap("partial", None, vec!["one.txt".into()], false, &mut out, &mut err).unwrap();
+    files_snap(
+        "partial",
+        None,
+        vec!["one.txt".into()],
+        false,
+        &mut out,
+        &mut err,
+    )
+    .unwrap();
 
     let kv = repo.kv();
     let id = resolve_snapshot_id("partial", &kv).unwrap();
@@ -672,7 +685,15 @@ fn files_snap_patches_existing_snapshot() {
     full_snap("base", None, &mut out, &mut err).unwrap();
 
     repo.write("two.txt", "2");
-    files_snap("base", None, vec!["two.txt".into()], true, &mut out, &mut err).unwrap();
+    files_snap(
+        "base",
+        None,
+        vec!["two.txt".into()],
+        true,
+        &mut out,
+        &mut err,
+    )
+    .unwrap();
 
     let kv = repo.kv();
     let id = resolve_snapshot_id("base", &kv).unwrap();
@@ -689,7 +710,14 @@ fn files_snap_missing_file_errors() {
     let mut err = Vec::new();
 
     repo.write("real.txt", "r");
-    let res = files_snap("p", None, vec!["ghost.txt".into()], false, &mut out, &mut err);
+    let res = files_snap(
+        "p",
+        None,
+        vec!["ghost.txt".into()],
+        false,
+        &mut out,
+        &mut err,
+    );
     assert!(res.is_err());
 }
 
@@ -752,7 +780,11 @@ fn show_file_outputs_text_content() {
 
     out.clear();
     show_file("f.txt", None, None, None, &mut out).unwrap();
-    assert!(String::from_utf8(out).unwrap().contains("file contents here"));
+    assert!(
+        String::from_utf8(out)
+            .unwrap()
+            .contains("file contents here")
+    );
 }
 
 #[test]
@@ -762,7 +794,11 @@ fn show_file_binary_falls_back_to_hex() {
     let mut out = Vec::new();
     let mut err = Vec::new();
 
-    std::fs::write(repo._dir.path().join("bin.dat"), [0xdeu8, 0xad, 0xbe, 0xef, 0x00]).unwrap();
+    std::fs::write(
+        repo._dir.path().join("bin.dat"),
+        [0xdeu8, 0xad, 0xbe, 0xef, 0x00],
+    )
+    .unwrap();
     full_snap("s", None, &mut out, &mut err).unwrap();
 
     out.clear();
@@ -880,11 +916,20 @@ fn find_common_ancestor_linear_history() {
     let kv = repo.kv();
 
     let snap_a = make_snapshot(&[], vec![]);
-    let id_a = store_snapshot(&snap_a, "a", &kv).unwrap().as_bytes().to_owned();
+    let id_a = store_snapshot(&snap_a, "a", &kv)
+        .unwrap()
+        .as_bytes()
+        .to_owned();
     let snap_b = make_snapshot(&[], vec![id_a]);
-    let id_b = store_snapshot(&snap_b, "b", &kv).unwrap().as_bytes().to_owned();
+    let id_b = store_snapshot(&snap_b, "b", &kv)
+        .unwrap()
+        .as_bytes()
+        .to_owned();
     let snap_c = make_snapshot(&[], vec![id_b]);
-    let id_c = store_snapshot(&snap_c, "c", &kv).unwrap().as_bytes().to_owned();
+    let id_c = store_snapshot(&snap_c, "c", &kv)
+        .unwrap()
+        .as_bytes()
+        .to_owned();
 
     let (base, _, _) = find_common_ancestor(&kv, &kv, id_c, id_a).unwrap();
     assert_eq!(base, Some(id_a));
@@ -897,11 +942,20 @@ fn find_common_ancestor_diverged_histories() {
     let kv = repo.kv();
 
     let root = make_snapshot(&[], vec![]);
-    let id_root = store_snapshot(&root, "root", &kv).unwrap().as_bytes().to_owned();
-    let left = make_snapshot(&[], vec![id_root]);
-    let id_left = store_snapshot(&left, "left", &kv).unwrap().as_bytes().to_owned();
-    let right = make_snapshot(&[], vec![id_root]);
-    let id_right = store_snapshot(&right, "right", &kv).unwrap().as_bytes().to_owned();
+    let id_root = store_snapshot(&root, "root", &kv)
+        .unwrap()
+        .as_bytes()
+        .to_owned();
+    let left = make_snapshot(&[("left.txt", "left")], vec![id_root]);
+    let id_left = store_snapshot(&left, "left", &kv)
+        .unwrap()
+        .as_bytes()
+        .to_owned();
+    let right = make_snapshot(&[("right.txt", "right")], vec![id_root]);
+    let id_right = store_snapshot(&right, "right", &kv)
+        .unwrap()
+        .as_bytes()
+        .to_owned();
 
     let (base, da, db) = find_common_ancestor(&kv, &kv, id_left, id_right).unwrap();
     assert_eq!(base, Some(id_root));
@@ -915,9 +969,9 @@ fn find_common_ancestor_unrelated_histories() {
     let repo = setup_repo("ancestor_unrelated", &[]);
     let kv = repo.kv();
 
-    let a = make_snapshot(&[], vec![]);
+    let a = make_snapshot(&[("a.txt", "a")], vec![]);
     let id_a = store_snapshot(&a, "a", &kv).unwrap().as_bytes().to_owned();
-    let b = make_snapshot(&[], vec![]);
+    let b = make_snapshot(&[("b.txt", "b")], vec![]);
     let id_b = store_snapshot(&b, "b", &kv).unwrap().as_bytes().to_owned();
 
     let (base, _, _) = find_common_ancestor(&kv, &kv, id_a, id_b).unwrap();
@@ -941,7 +995,10 @@ fn copy_snapshot_moves_snapshot_and_blobs() {
 
     let src_kv = src.kv();
     let dst_kv = dst.kv();
-    let id = store_snapshot(&snap, "s", &src_kv).unwrap().as_bytes().to_owned();
+    let id = store_snapshot(&snap, "s", &src_kv)
+        .unwrap()
+        .as_bytes()
+        .to_owned();
 
     copy_snapshot(id, &src_kv, &dst_kv, &src.fs, &dst.fs).unwrap();
 
@@ -1061,7 +1118,11 @@ fn merge_clean_run_combines_changes() {
     out.clear();
     merge_run("merge_b".into(), "m1", None, None, &mut out, &mut err).unwrap();
     let output = String::from_utf8(out).unwrap();
-    assert!(output.contains("Merge successfully completed"), "{}", output);
+    assert!(
+        output.contains("Merge successfully completed"),
+        "{}",
+        output
+    );
 
     // merged head contains both files
     let head = get_head(&a.fs).unwrap().unwrap();
@@ -1112,7 +1173,11 @@ fn merge_conflicting_run_stores_partial_merge() {
     out.clear();
     merge_end("m1", &mut out, &mut err).unwrap();
     let output = String::from_utf8(out).unwrap();
-    assert!(output.contains("Merge successfully completed"), "{}", output);
+    assert!(
+        output.contains("Merge successfully completed"),
+        "{}",
+        output
+    );
 
     // partial merge cleaned up, content is ours
     assert!(a.kv().get_merge("m1").unwrap().is_none());

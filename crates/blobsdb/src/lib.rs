@@ -44,7 +44,7 @@ async fn write_chunk_with_fs<R: AsyncRead + Unpin>(
         .await
         .map_err(|e| format!("Error while writing the encoded content: {e}"))?;
     let compressed: Vec<u8> = enc.into_inner();
-    fs.write(&destination, compressed.into())
+    fs.write(destination, compressed.into())
         .await
         .map_err(|e| format!("Error while storing encoded content: {e}"))?;
 

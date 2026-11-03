@@ -142,7 +142,11 @@ fn fetch_conflict_contents(
     let jobs: Vec<(Vec<Chunk>, Vec<Chunk>, Vec<Chunk>)> = conflicts
         .iter()
         .map(|(_, base_chunks, our_chunks, their_chunks)| {
-            (base_chunks.clone(), our_chunks.clone(), their_chunks.clone())
+            (
+                base_chunks.clone(),
+                our_chunks.clone(),
+                their_chunks.clone(),
+            )
         })
         .collect();
 
@@ -527,7 +531,7 @@ pub fn merge_run<O: io::Write, E: io::Write>(
                     Some(&format!(
                         "merged repository at {} with {} at snapshot ID {}",
                         blake3::Hash::from_bytes(snapshot_id_a),
-                        &other_context,
+                        other_context,
                         blake3::Hash::from_bytes(snapshot_id_b)
                     )),
                     &fs_a,

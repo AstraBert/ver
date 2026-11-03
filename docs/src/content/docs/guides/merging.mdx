@@ -65,7 +65,7 @@ ver merge pick my-merge --our src/main.rs --their README.md
 For deletion conflicts, picking the side where the file still exists keeps it; picking the side where it was deleted deletes it.
 
 <Aside type="note">
-  Decisions are only recorded through `merge pick`. Editing a conflicted file by hand does not resolve its conflict — the merge state still lists it until you pick a side.
+  Decisions are only recorded through `merge pick`. Editing a conflicted file by hand does not resolve its conflict; the merge state still lists it until you pick a side.
 </Aside>
 
 Then finalize:
@@ -78,7 +78,7 @@ If any conflict is still unresolved, `merge end` lists what's left and refuses. 
 
 ## No common ancestor
 
-If the two contexts share no snapshot history — for example, they were initialized independently — merging is impossible:
+If the two contexts share no snapshot history (for example, they were initialized independently), merging is impossible:
 
 ```text
 Could not find a common base for the two repositories, merging is not possible
