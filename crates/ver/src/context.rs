@@ -119,14 +119,12 @@ impl KVStoreContext {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct VerContext {
     pub fs: HashMap<String, FilesystemContext>,
     pub kv: HashMap<String, KVStoreContext>,
     pub current: Option<String>,
 }
-
 
 impl VerContext {
     pub fn validate(&self) -> Result<(), VerError> {
