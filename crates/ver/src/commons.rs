@@ -109,7 +109,7 @@ pub fn read_history(
     tolerate_incomplete: bool,
     fs: &Arc<dyn Fs>,
 ) -> Result<(Vec<String>, bool), VerError> {
-    let mut it = rt().block_on(async {
+    let it = rt().block_on(async {
         fs.list(HISTORY_PATH, Some(Box::new(noignore_local_disk_walker)))
             .await
     })?;

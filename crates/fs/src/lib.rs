@@ -191,7 +191,7 @@ impl Fs for DiskFs {
         path: Option<&str>,
         ignore: bool,
     ) -> Result<(), FsError> {
-        let mut iterator = if let Some(p) = path {
+        let iterator = if let Some(p) = path {
             if ignore {
                 self.list(p, Some(Box::new(local_disk_walker))).await?
             } else {
@@ -220,14 +220,17 @@ impl Fs for DiskFs {
             join_set.spawn(async move {
                 let _permit = permit;
                 let p = entry.path();
+                // Normalize path separators to forward slashes for cross-platform
+                // compatibility, especially when writing to object stores
+                let path_str = p.to_string_lossy().replace('\\', "/");
                 let content = fs_src
-                    .read(&p.to_string_lossy())
+                    .read(&path_str)
                     .await
-                    .map_err(|e| (e, p.to_string_lossy().to_string()))?;
+                    .map_err(|e| (e, path_str.clone()))?;
                 fs_dest
-                    .write(&p.to_string_lossy(), content)
+                    .write(&path_str, content)
                     .await
-                    .map_err(|e| (e, p.to_string_lossy().to_string()))?;
+                    .map_err(|e| (e, path_str.clone()))?;
 
                 Ok(())
             });
@@ -466,7 +469,7 @@ impl Fs for ObjectStoreFs {
         path: Option<&str>,
         ignore: bool,
     ) -> Result<(), FsError> {
-        let mut iterator = if let Some(p) = path {
+        let iterator = if let Some(p) = path {
             if ignore {
                 self.list(p, None).await?
             } else {
@@ -493,14 +496,17 @@ impl Fs for ObjectStoreFs {
             join_set.spawn(async move {
                 let _permit = permit;
                 let p = entry.path();
+                // Normalize path separators to forward slashes for cross-platform
+                // compatibility, especially when writing to object stores
+                let path_str = p.to_string_lossy().replace('\\', "/");
                 let content = fs_src
-                    .read(&p.to_string_lossy())
+                    .read(&path_str)
                     .await
-                    .map_err(|e| (e, p.to_string_lossy().to_string()))?;
+                    .map_err(|e| (e, path_str.clone()))?;
                 fs_dest
-                    .write(&p.to_string_lossy(), content)
+                    .write(&path_str, content)
                     .await
-                    .map_err(|e| (e, p.to_string_lossy().to_string()))?;
+                    .map_err(|e| (e, path_str.clone()))?;
 
                 Ok(())
             });
