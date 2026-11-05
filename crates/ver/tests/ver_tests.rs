@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    env,
     io::Write,
     str::FromStr,
     sync::{Arc, Mutex, MutexGuard, OnceLock},
@@ -362,16 +363,17 @@ fn panic_msg_extracts_strings() {
 #[test]
 fn context_validate_ok_for_local_embedded() {
     let mut ctx = VerContext::default();
+    let base_directory = env::temp_dir().join("x");
     ctx.fs.insert(
         "a".into(),
         context::FilesystemContext::Local {
-            base_directory: "/tmp/x".into(),
+            base_directory: base_directory.to_string_lossy().to_string(),
         },
     );
     ctx.kv.insert(
         "a".into(),
         context::KVStoreContext::Embedded {
-            redb_path: "/tmp/x.redb".into(),
+            redb_path: base_directory.join("kv.redb").to_string_lossy().to_string(),
         },
     );
     assert!(ctx.validate().is_ok());
@@ -528,11 +530,12 @@ fn read_context_roundtrip_through_global_file() {
 
     let mut ctx = VerContext::default();
     ctx.scaffold("rt", FSType::Local, KVType::Embedded).unwrap();
+    let base_dir_path = env::temp_dir().join("x");
     if let Some(context::FilesystemContext::Local { base_directory }) = ctx.fs.get_mut("rt") {
-        *base_directory = "/tmp/rt".into();
+        *base_directory = base_dir_path.join("rt").to_string_lossy().to_string();
     }
     if let Some(context::KVStoreContext::Embedded { redb_path }) = ctx.kv.get_mut("rt") {
-        *redb_path = "/tmp/rt.redb".into();
+        *redb_path = base_dir_path.join("rt.redb").to_string_lossy().to_string();
     }
     ctx.switch("rt").unwrap();
     ctx.to_global_context().unwrap();
