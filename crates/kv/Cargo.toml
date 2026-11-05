@@ -2,6 +2,9 @@
 name = "ver-kv"
 version = "0.1.0"
 edition = "2024"
+readme = "README.md"
+description = "Key-value store trait and implementation for ver"
+license = "MIT"
 
 [dependencies]
 redis = { workspace = true }
