@@ -5,6 +5,10 @@ sidebar:
   order: 0
 ---
 
+<div class="flex justify-center">
+  <Logo class="h-16 w-24 text-foreground" />
+</div>
+
 `ver` (from the Latin _ver_, "spring") is an intuitive, easy-to-use, and non git-like version control system. It tracks your files as content-defined chunks, stores them in a content-addressable blob store, and syncs to S3, GCS, or Azure Blob Storage.
 
 <Aside type="caution" title="Alpha release">
@@ -17,7 +21,13 @@ sidebar:
 - Keep several **contexts** for the same project (local disk, S3, GCS, Azure) and move snapshots between them with `ver sync`.
 - Merge two diverged copies of a project with a three-way merge and interactive conflict resolution.
 
-## Get started
+## Get started with your agent
+
+Point your coding agent at ver's agent-readable documentation index and let it install and set up ver for you:
+
+<CopyCode code="Install and set up ver from https://ver-vcs.net/llms.txt" label="Agent setup instruction" />
+
+## Get started manually
 
 <Steps>
   <Step title="Install">

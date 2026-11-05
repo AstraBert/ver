@@ -1,0 +1,53 @@
+---
+/**
+ * CopyCode — a read-only code block with a copy button.
+ *
+ *   <CopyCode code="Install and set up ver from https://ver-vcs.net/llms.txt" />
+ *
+ * Renders the text in a monospace block; the button copies it verbatim and
+ * confirms inline. Use it for one-liners an agent or a human should paste
+ * as-is.
+ */
+import Icon from "@cloudflare/nimbus-docs/components/Icon.astro";
+import { cn } from "@/lib/cn";
+import type { HTMLAttributes } from "astro/types";
+
+interface Props extends HTMLAttributes<"div"> {
+  /** The exact text copied to the clipboard and shown in the block. */
+  code: string;
+  /** Accessible label for the region; defaults to "Copyable code". */
+  label?: string;
+}
+
+const { code, label = "Copyable code", class: className, ...attrs } = Astro.props;
+---
+
+<div
+  data-nb-copy-code
+  class={cn(
+    "not-prose flex items-stretch gap-2 rounded-lg border border-border bg-card p-2 ps-3",
+    className,
+  )}
+  {...attrs}
+>
+  <code
+    aria-label={label}
+    class="min-w-0 flex-1 self-center overflow-x-auto font-mono text-sm text-foreground [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    >{code}</code
+  >
+  <button
+    type="button"
+    data-nb-copy-code-copy
+    data-copy={code}
+    title="Copy to clipboard"
+    class="inline-flex shrink-0 cursor-pointer items-center gap-1.5 self-center rounded-md bg-transparent px-2 py-1 text-[0.8125rem] text-muted-foreground no-underline transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
+  >
+    <Icon name="ph:copy" class="w-3.5 h-3.5" />
+    <span data-nb-copy-code-label>Copy</span>
+  </button>
+  <span class="sr-only" role="status" data-nb-copy-code-status></span>
+</div>
+
+<script>
+  import "./copy-code.client";
+</script>

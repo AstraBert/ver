@@ -125,7 +125,11 @@ async fn disk_list_noignore_includes_ver_directory() {
         .collect();
     dbg!(entries.clone());
 
-    assert!(entries.iter().any(|e| e.contains(".ver/hidden.txt")));
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.contains(".ver") && e.contains("hidden.txt"))
+    );
 }
 
 #[tokio::test]

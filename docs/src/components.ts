@@ -5,6 +5,8 @@
  */
 
 import { Aside } from "./components/ui/aside";
+import CopyCode from "./components/CopyCode.astro";
+import Logo from "./components/Logo.astro";
 import Render from "./components/Render.astro";
 import { Card } from "./components/ui/card";
 import { CardGrid } from "./components/ui/card-grid";
@@ -16,6 +18,8 @@ export const components = {
   Aside,
   Card,
   CardGrid,
+  CopyCode,
+  Logo,
   PackageManagers,
   Render,
   Step,
