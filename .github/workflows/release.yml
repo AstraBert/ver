@@ -51,11 +51,17 @@ jobs:
       - name: Check Cargo.toml version matches
         shell: bash
         env:
+          CRATE: ver-vcs
           EXPECTED: ${{ steps.version.outputs.crate_version }}
         run: |
-          found="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version' | sort -u)"
+          found="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r --arg name "$CRATE" '.packages[] | select(.name == $name) | .version')"
+          if [[ -z "$found" ]]; then
+            echo "Package '$CRATE' not found in workspace" >&2
+            exit 1
+          fi
           if [[ "$found" != "$EXPECTED" ]]; then
-            echo "Cargo.toml version(s) '$found' do not match release version '$EXPECTED'" >&2
+            echo "$CRATE version '$found' does not match release version '$EXPECTED'" >&2
             exit 1
           fi
 
