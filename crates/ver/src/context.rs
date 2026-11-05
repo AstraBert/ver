@@ -63,7 +63,7 @@ impl FilesystemContext {
                     account_name: Some(account_name),
                     account_key: Some(account_key),
                     endpoint: Some(endpoint),
-                    container_name: container_name,
+                    container_name,
                 })?;
                 Arc::new(ObjectStoreFs::new(object_st))
             }
@@ -119,21 +119,11 @@ impl KVStoreContext {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct VerContext {
     pub fs: HashMap<String, FilesystemContext>,
     pub kv: HashMap<String, KVStoreContext>,
     pub current: Option<String>,
-}
-
-impl Default for VerContext {
-    fn default() -> Self {
-        VerContext {
-            fs: HashMap::new(),
-            kv: HashMap::new(),
-            current: None,
-        }
-    }
 }
 
 impl VerContext {
@@ -226,7 +216,7 @@ impl VerContext {
             return Ok((fs.clone(), kv.clone()));
         }
 
-        return Err(format!("Could not find {context} among contexts").into());
+        Err(format!("Could not find {context} among contexts").into())
     }
 
     pub fn scaffold(&mut self, context_name: &str, fs: FSType, kv: KVType) -> Result<(), VerError> {
@@ -284,7 +274,7 @@ pub fn read_context() -> Result<VerContext, VerError> {
         return Ok(VerContext::default());
     }
 
-    let content = fs::read_to_string(&path)?;
+    let content = fs::read_to_string(path)?;
     let ctx: VerContext = toml::from_str(&content)?;
     ctx.validate()?;
 

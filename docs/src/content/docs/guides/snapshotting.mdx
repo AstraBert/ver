@@ -1,0 +1,75 @@
+---
+title: Snapshotting
+description: Take full or partial snapshots, restore them, and browse history.
+sidebar:
+  order: 0
+---
+
+Snapshots are the unit of history in ver. Every snapshot has a name (or you can use its BLAKE3 ID) and an optional description.
+
+## Full snapshots
+
+```sh
+ver snap full --name my-snapshot --description "before the big refactor"
+```
+
+Snapshots every tracked file in the project. The previous head becomes the new snapshot's parent.
+
+## Partial snapshots
+
+Snapshot only specific files:
+
+```sh
+ver snap from --name config-only --file ver.toml --file README.md
+```
+
+A partial snapshot is marked `partial: true`. Restoring one never deletes files it doesn't mention.
+
+## Patching a snapshot
+
+Add or update files in an existing snapshot:
+
+```sh
+ver snap patch --identifier my-snapshot --file forgot-this.txt
+```
+
+The snapshot keeps its ID and name; its file map is updated in place. Patching a full snapshot keeps it full.
+
+<Aside type="note">
+  Patching rewrites history. Other contexts that already synced this snapshot won't see the change.
+</Aside>
+
+## Restoring: `ver goto`
+
+```sh
+ver goto my-snapshot
+```
+
+Reconstructs the snapshot's files in the project and moves the head pointer. With a full snapshot, files on disk that aren't in the snapshot are **deleted**; pass `--no-delete` to keep them:
+
+```sh
+ver goto my-snapshot --no-delete
+```
+
+Restore only specific paths:
+
+```sh
+ver goto my-snapshot --path src/main.rs --path Cargo.toml
+```
+
+If you're already on the requested snapshot, `goto` says so and does nothing.
+
+## Browsing history: `ver log`
+
+```sh
+ver log
+ver log --limit 5
+```
+
+Prints history entries (date, snapshot ID, name, description), newest first, in a pager.
+
+History entries are individual files under `.ver/snapshots_history/`, so entries can go missing independently (e.g. after a partial sync). By default a missing entry is an error; pass `--incomplete-ok` to print what exists with a warning:
+
+```sh
+ver log --incomplete-ok
+```

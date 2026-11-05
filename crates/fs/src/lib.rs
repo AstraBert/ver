@@ -1,9 +1,4 @@
-use std::{
-    io,
-    path::PathBuf,
-    pin::Pin,
-    sync::{Arc, mpsc},
-};
+use std::{io, path::PathBuf, pin::Pin, sync::Arc};
 
 use bytes::Bytes;
 use futures_util::stream::StreamExt;
@@ -196,7 +191,7 @@ impl Fs for DiskFs {
         path: Option<&str>,
         ignore: bool,
     ) -> Result<(), FsError> {
-        let mut iterator = if let Some(p) = path {
+        let iterator = if let Some(p) = path {
             if ignore {
                 self.list(p, Some(Box::new(local_disk_walker))).await?
             } else {
@@ -214,7 +209,7 @@ impl Fs for DiskFs {
         let mut join_set = JoinSet::<Result<(), (FsError, String)>>::new();
         let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_COPIES));
 
-        while let Some(entry) = iterator.next() {
+        for entry in iterator {
             let permit = sem
                 .clone()
                 .acquire_owned()
@@ -225,14 +220,17 @@ impl Fs for DiskFs {
             join_set.spawn(async move {
                 let _permit = permit;
                 let p = entry.path();
+                // Normalize path separators to forward slashes for cross-platform
+                // compatibility, especially when writing to object stores
+                let path_str = p.to_string_lossy().replace('\\', "/");
                 let content = fs_src
-                    .read(&p.to_string_lossy())
+                    .read(&path_str)
                     .await
-                    .map_err(|e| (e, p.to_string_lossy().to_string()))?;
+                    .map_err(|e| (e, path_str.clone()))?;
                 fs_dest
-                    .write(&p.to_string_lossy(), content)
+                    .write(&path_str, content)
                     .await
-                    .map_err(|e| (e, p.to_string_lossy().to_string()))?;
+                    .map_err(|e| (e, path_str.clone()))?;
 
                 Ok(())
             });
@@ -250,7 +248,7 @@ impl Fs for DiskFs {
             }
         }
 
-        if failed.len() > 0 {
+        if !failed.is_empty() {
             return Err(FsError::Copy(format!(
                 "Failed to copy the following paths: {}",
                 failed.join(", ")
@@ -294,7 +292,7 @@ impl Fs for DiskFs {
             }
         }
 
-        if failed.len() > 0 {
+        if !failed.is_empty() {
             return Err(FsError::Copy(format!(
                 "Failed to copy the following paths: {}",
                 failed.join(", ")
@@ -335,7 +333,7 @@ impl DirEntry for ObjectStoreEntry {
 
 #[derive(Debug)]
 pub struct ObjectStoreIterator {
-    inner: std::sync::mpsc::IntoIter<ObjectStoreEntry>,
+    inner: std::vec::IntoIter<ObjectStoreEntry>,
 }
 
 impl ObjectStoreIterator {
@@ -409,31 +407,25 @@ impl Fs for ObjectStoreFs {
     }
 
     async fn list(&self, path: &str, _walker_fn: Option<Walker>) -> Result<EntryIter, FsError> {
-        let (tx, rx) = mpsc::sync_channel(1);
-        let handle = tokio::runtime::Handle::current();
-
+        // Collect eagerly: returning a channel-backed iterator fed by a
+        // spawned task would deadlock single-threaded runtimes, where the
+        // blocking `next()` prevents the producer from ever running.
         let stream = self
             .object_store
             .list(Some(&ObjPath::from_url_path(path).map_err(|e| {
                 FsError::Delete(format!("Invalid object path: {}", e))
             })?));
 
-        handle.spawn(async move {
-            let mut stream = Box::pin(stream);
-            while let Some(item) = stream.next().await {
-                if item.is_ok() {
-                    let entry = ObjectStoreEntry::new(item.unwrap().location);
-                    if tx.send(entry).is_err() {
-                        break; // consumer dropped the iterator
-                    }
-                } else {
-                    break; // break on first error
-                }
-            }
-        });
+        let mut entries = Vec::new();
+        let mut stream = Box::pin(stream);
+        while let Some(item) = stream.next().await {
+            let item =
+                item.map_err(|e| FsError::List(format!("Error while listing objects: {e}")))?;
+            entries.push(ObjectStoreEntry::new(item.location));
+        }
 
         Ok(ObjectStoreIterator {
-            inner: rx.into_iter(),
+            inner: entries.into_iter(),
         }
         .into_entry_iter())
     }
@@ -477,7 +469,7 @@ impl Fs for ObjectStoreFs {
         path: Option<&str>,
         ignore: bool,
     ) -> Result<(), FsError> {
-        let mut iterator = if let Some(p) = path {
+        let iterator = if let Some(p) = path {
             if ignore {
                 self.list(p, None).await?
             } else {
@@ -493,7 +485,7 @@ impl Fs for ObjectStoreFs {
         let mut join_set = JoinSet::<Result<(), (FsError, String)>>::new();
         let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_COPIES));
 
-        while let Some(entry) = iterator.next() {
+        for entry in iterator {
             let permit = sem
                 .clone()
                 .acquire_owned()
@@ -504,14 +496,17 @@ impl Fs for ObjectStoreFs {
             join_set.spawn(async move {
                 let _permit = permit;
                 let p = entry.path();
+                // Normalize path separators to forward slashes for cross-platform
+                // compatibility, especially when writing to object stores
+                let path_str = p.to_string_lossy().replace('\\', "/");
                 let content = fs_src
-                    .read(&p.to_string_lossy())
+                    .read(&path_str)
                     .await
-                    .map_err(|e| (e, p.to_string_lossy().to_string()))?;
+                    .map_err(|e| (e, path_str.clone()))?;
                 fs_dest
-                    .write(&p.to_string_lossy(), content)
+                    .write(&path_str, content)
                     .await
-                    .map_err(|e| (e, p.to_string_lossy().to_string()))?;
+                    .map_err(|e| (e, path_str.clone()))?;
 
                 Ok(())
             });
@@ -529,7 +524,7 @@ impl Fs for ObjectStoreFs {
             }
         }
 
-        if failed.len() > 0 {
+        if !failed.is_empty() {
             return Err(FsError::Copy(format!(
                 "Failed to copy the following paths: {}",
                 failed.join(", ")
@@ -573,7 +568,7 @@ impl Fs for ObjectStoreFs {
             }
         }
 
-        if failed.len() > 0 {
+        if !failed.is_empty() {
             return Err(FsError::Copy(format!(
                 "Failed to copy the following paths: {}",
                 failed.join(", ")
@@ -632,7 +627,7 @@ pub fn local_disk_walker(path: &PathBuf, parent: &PathBuf) -> Result<EntryIter, 
 }
 
 pub fn noignore_local_disk_walker(path: &PathBuf, parent: &PathBuf) -> Result<EntryIter, FsError> {
-    let walker = ignore::WalkBuilder::new(path).build();
+    let walker = ignore::WalkBuilder::new(path).hidden(false).build();
 
     let entries: Vec<ignore::DirEntry> = walker
         .filter(|p| {

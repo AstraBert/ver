@@ -51,21 +51,27 @@ impl KVStore for RedbStore {
             .db
             .begin_read()
             .map_err(|e| KVError::Get(format!("Error while opening redb read transaction: {e}")))?;
-        let table = rx.open_table(SNAPSHOT_TABLE).map_err(|e| {
-            KVError::Get(format!(
-                "Error while opening redb snapshots table in readonly mode: {e}"
-            ))
-        })?;
-        let opt = table.get(key).map_err(|e| {
-            KVError::Get(format!(
-                "Error while performing get operation on the snapshots table: {e}"
-            ))
-        })?;
+        let result = rx.open_table(SNAPSHOT_TABLE);
+        match result {
+            Ok(table) => {
+                let opt = table.get(key).map_err(|e| {
+                    KVError::Get(format!(
+                        "Error while performing get operation on the snapshots table: {e}"
+                    ))
+                })?;
 
-        if let Some(value) = opt {
-            return Ok(Some(Bytes::copy_from_slice(value.value())));
+                if let Some(value) = opt {
+                    return Ok(Some(Bytes::copy_from_slice(value.value())));
+                }
+                Ok(None)
+            }
+            Err(e) => match e {
+                TableError::TableDoesNotExist(_) => Ok(None),
+                _ => Err(KVError::Get(format!(
+                    "Error while opening redb snapshots table in readonly mode: {e}"
+                ))),
+            },
         }
-        Ok(None)
     }
 
     fn put_snapshot(&self, key: [u8; 32], value: &[u8]) -> Result<(), KVError> {
@@ -94,21 +100,27 @@ impl KVStore for RedbStore {
             .db
             .begin_read()
             .map_err(|e| KVError::Get(format!("Error while opening redb read transaction: {e}")))?;
-        let table = rx.open_table(NAMES_TABLE).map_err(|e| {
-            KVError::Get(format!(
-                "Error while opening redb names table in readonly mode: {e}"
-            ))
-        })?;
-        let opt = table.get(key).map_err(|e| {
-            KVError::Get(format!(
-                "Error while performing get operation on the names table: {e}"
-            ))
-        })?;
+        let result = rx.open_table(NAMES_TABLE);
+        match result {
+            Ok(table) => {
+                let opt = table.get(key).map_err(|e| {
+                    KVError::Get(format!(
+                        "Error while performing get operation on the names table: {e}"
+                    ))
+                })?;
 
-        if let Some(value) = opt {
-            return Ok(Some(value.value()));
+                if let Some(value) = opt {
+                    return Ok(Some(value.value()));
+                }
+                Ok(None)
+            }
+            Err(e) => match e {
+                TableError::TableDoesNotExist(_) => Ok(None),
+                _ => Err(KVError::Get(format!(
+                    "Error while opening redb names table in readonly mode: {e}"
+                ))),
+            },
         }
-        Ok(None)
     }
 
     fn put_name(&self, key: &str, value: [u8; 32]) -> Result<(), KVError> {
@@ -137,21 +149,28 @@ impl KVStore for RedbStore {
             .db
             .begin_read()
             .map_err(|e| KVError::Get(format!("Error while opening redb read transaction: {e}")))?;
-        let table = rx.open_table(PARTIAL_MERGES_TABLE).map_err(|e| {
-            KVError::Get(format!(
-                "Error while opening redb partial_merges table in readonly mode: {e}"
-            ))
-        })?;
-        let opt = table.get(key).map_err(|e| {
-            KVError::Get(format!(
-                "Error while performing get operation on the partial_merges table: {e}"
-            ))
-        })?;
+        let result = rx.open_table(PARTIAL_MERGES_TABLE);
+        match result {
+            Ok(table) => {
+                let opt = table.get(key).map_err(|e| {
+                    KVError::Get(format!(
+                        "Error while performing get operation on the partial_merges table: {e}"
+                    ))
+                })?;
 
-        if let Some(value) = opt {
-            return Ok(Some(Bytes::copy_from_slice(value.value())));
+                if let Some(value) = opt {
+                    return Ok(Some(Bytes::copy_from_slice(value.value())));
+                }
+
+                Ok(None)
+            }
+            Err(e) => match e {
+                TableError::TableDoesNotExist(_) => Ok(None),
+                _ => Err(KVError::Get(format!(
+                    "Error while opening redb partial_merges table in readonly mode: {e}"
+                ))),
+            },
         }
-        Ok(None)
     }
 
     fn put_merge(&self, key: &str, value: &[u8]) -> Result<(), KVError> {
@@ -470,7 +489,7 @@ impl KVStore for RedisStore {
             .map_err(|e| KVError::Copy(format!("Error while getting Redis connection: {e}")))?;
 
         let snapshots = con
-            .scan_match::<_, String>(format!("{}/", SNAPSHOTS_NAMESPACE))
+            .scan_match::<_, String>(format!("{}/*", SNAPSHOTS_NAMESPACE))
             .map_err(|e| {
                 KVError::Copy(format!(
                     "Error while executing Redis `scan_match` command: {e}"
@@ -497,14 +516,20 @@ impl KVStore for RedisStore {
             thread::spawn(move || {
                 let res = kv_src.get_snapshot(bts);
                 match res {
-                    Ok(val) => {
-                        let put_res = kv_dest.put_snapshot(bts, val.unwrap().iter().as_slice());
+                    Ok(Some(val)) => {
+                        let put_res = kv_dest.put_snapshot(bts, val.iter().as_slice());
                         tx.send(put_res)
                     }
+                    Ok(None) => tx.send(Err(KVError::Copy(format!(
+                        "Snapshot key disappeared between scan and get: {}",
+                        blake3::Hash::from_bytes(bts)
+                    )))),
                     Err(e) => tx.send(Err(e)),
                 }
             });
         }
+
+        drop(snapshots_tx);
 
         for res in snapshots_rx {
             match res {
@@ -514,7 +539,7 @@ impl KVStore for RedisStore {
         }
 
         let names = con
-            .scan_match::<_, String>(format!("{}/", NAMES_NAMESPACE))
+            .scan_match::<_, String>(format!("{}/*", NAMES_NAMESPACE))
             .map_err(|e| {
                 KVError::Copy(format!(
                     "Error while executing Redis `scan_match` command: {e}"
@@ -534,14 +559,19 @@ impl KVStore for RedisStore {
             thread::spawn(move || {
                 let res = kv_src.get_name(&key);
                 match res {
-                    Ok(val) => {
-                        let put_res = kv_dest.put_name(&key, val.unwrap());
+                    Ok(Some(val)) => {
+                        let put_res = kv_dest.put_name(&key, val);
                         tx.send(put_res)
                     }
+                    Ok(None) => tx.send(Err(KVError::Copy(format!(
+                        "Name key disappeared between scan and get: {key}"
+                    )))),
                     Err(e) => tx.send(Err(e)),
                 }
             });
         }
+
+        drop(names_tx);
 
         for res in names_rx {
             match res {
@@ -551,7 +581,7 @@ impl KVStore for RedisStore {
         }
 
         let merges = con
-            .scan_match::<_, String>(format!("{}/", PARTIAL_MERGES_NAMESPACE))
+            .scan_match::<_, String>(format!("{}/*", PARTIAL_MERGES_NAMESPACE))
             .map_err(|e| {
                 KVError::Copy(format!(
                     "Error while executing Redis `scan_match` command: {e}"
@@ -572,14 +602,19 @@ impl KVStore for RedisStore {
             thread::spawn(move || {
                 let res = kv_src.get_merge(&key);
                 match res {
-                    Ok(val) => {
-                        let put_res = kv_dest.put_merge(&key, val.unwrap().iter().as_slice());
+                    Ok(Some(val)) => {
+                        let put_res = kv_dest.put_merge(&key, val.iter().as_slice());
                         tx.send(put_res)
                     }
+                    Ok(None) => tx.send(Err(KVError::Copy(format!(
+                        "Merge key disappeared between scan and get: {key}"
+                    )))),
                     Err(e) => tx.send(Err(e)),
                 }
             });
         }
+
+        drop(merges_tx);
 
         for res in merges_rx {
             match res {

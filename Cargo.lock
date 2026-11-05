@@ -2564,6 +2564,7 @@ dependencies = [
  "bytes",
  "fastcdc",
  "futures",
+ "object_store",
  "reqwest",
  "serde",
  "serde_json",
@@ -2583,6 +2584,7 @@ dependencies = [
  "futures-util",
  "ignore",
  "object_store",
+ "tempdir",
  "tokio",
  "tokio-util",
 ]
@@ -2595,11 +2597,12 @@ dependencies = [
  "bytes",
  "redb",
  "redis",
+ "tempdir",
 ]
 
 [[package]]
 name = "ver-vcs"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "blake3",
  "bytes",
@@ -2614,6 +2617,7 @@ dependencies = [
  "redb",
  "serde",
  "serde_json",
+ "tempdir",
  "tokio",
  "toml",
  "ver-blobsdb",

@@ -10,10 +10,9 @@ use crate::{
 
 pub fn init_context(context: Option<&str>) -> Result<(), VerError> {
     let ctx = read_context()?;
-    let opt = if context.is_none() {
-        ctx.current_context()
-    } else {
-        ctx.get_context(context.unwrap()).ok()
+    let opt = match context {
+        None => ctx.current_context(),
+        Some(name) => ctx.get_context(name).ok(),
     };
 
     if opt.is_none() {

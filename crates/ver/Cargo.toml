@@ -1,6 +1,6 @@
 [package]
 name = "ver-vcs"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 edition = "2024"
 readme = "README.md"
 description = "An intuitive, easy-to-use and non git-like version control system."
@@ -36,3 +36,6 @@ futures-util = { workspace = true }
 
 [features]
 pretty-hex = ["dep:pretty-hex"]
+
+[dev-dependencies]
+tempdir = "0.3.7"
