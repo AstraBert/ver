@@ -1,0 +1,112 @@
+---
+title: Contexts
+description: The contexts.toml file, backend options, and validation rules.
+sidebar:
+  order: 1
+---
+
+All contexts live in `~/.ver/contexts.toml`. ver reads and validates this file on every command.
+
+## File layout
+
+```toml title="~/.ver/contexts.toml"
+current = "laptop"
+
+[fs.laptop]
+base_directory = "/home/me/project"
+
+[kv.laptop]
+redb_path = "/home/me/project/.ver/kv.redb"
+
+[fs.offsite]
+access_key_id = "AKIA..."
+secret_access_key = "..."
+region = "eu-west-1"
+endpoint = "https://s3.eu-west-1.amazonaws.com"
+bucket = "my-ver-backups"
+
+[kv.offsite]
+uri = "redis://:password@my-redis-host:6379"
+```
+
+The `fs` and `kv` tables must contain the **same set of context names**. `current` names the context commands use by default.
+
+## Filesystem backends
+
+### Local
+
+```toml
+[fs.<name>]
+base_directory = "/absolute/path"   # must be absolute
+```
+
+Blobs and history live under `<base_directory>/.ver/`.
+
+### Amazon S3
+
+```toml
+[fs.<name>]
+access_key_id = "..."
+secret_access_key = "..."
+region = "..."
+endpoint = "..."                    # also works for S3-compatible storage
+bucket = "..."
+```
+
+### Google Cloud Storage
+
+```toml
+[fs.<name>]
+service_account_credentials_path = "/path/to/credentials.json"
+bucket = "..."
+```
+
+### Azure Blob Storage
+
+```toml
+[fs.<name>]
+account_name = "..."
+account_key = "..."
+endpoint = "..."
+container_name = "..."
+```
+
+## KV backends
+
+### Embedded (redb)
+
+```toml
+[kv.<name>]
+redb_path = "/absolute/path/to/file.redb"   # must be absolute
+```
+
+A single-file embedded database. Only valid together with a **local** filesystem backend.
+
+### Redis
+
+```toml
+[kv.<name>]
+uri = "redis://[:password@]host[:port]"
+```
+
+Required for object-storage filesystems. TLS is supported via `rediss://`.
+
+## Validation rules
+
+ver rejects the file when:
+
+- `fs` and `kv` have different context names;
+- a context pairs an object-storage filesystem with an embedded KV;
+- a local `base_directory` or `redb_path` is not absolute.
+
+## Managing contexts from the CLI
+
+```sh
+ver ctx scaffold offsite --fs s3 --kv redis   # add an empty entry to fill in
+ver ctx switch offsite                        # make it current
+ver ctx show --json                           # inspect the current context
+ver ctx list                                  # all context names
+ver ctx delete offsite                        # remove (refuses if current)
+```
+
+`ver ctx scaffold` writes empty strings for every field. Edit the file to fill them in, then run `ver ctx init` to create the project's storage layout.

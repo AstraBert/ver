@@ -1,51 +1,57 @@
-use std::{
-    env, fs, io,
-    path::{Path, PathBuf},
+use std::fs;
+
+use blobsdb::BLOBSDB_PREFIX;
+
+use crate::{
+    commons::{HISTORY_PATH, rt},
+    context::{FilesystemContext, KVStoreContext, read_context},
+    errors::VerError,
 };
 
-use blobsdb::{BlobsDB, get_object_store};
-use redb::{Database, Error as RedbError};
+pub fn init_context(context: Option<&str>) -> Result<(), VerError> {
+    let ctx = read_context()?;
+    let opt = match context {
+        None => ctx.current_context(),
+        Some(name) => ctx.get_context(name).ok(),
+    };
 
-use crate::errors::VerError;
-
-pub const VER_DIRECTORY: &str = ".ver";
-pub const SNAPSHOT_HISTORY_FILE: &str = "snapshot_history";
-pub const REDB_PATH: &str = "files.redb";
-pub const BLOBDB_PATH: &str = "blobs";
-pub const HEAD_PATH: &str = "head";
-pub const SYNC_MAP_PATH: &str = "sync_map";
-
-pub fn init_blobs_db(base_path: &Path) -> Result<BlobsDB, VerError> {
-    let store = get_object_store(blobsdb::GetObjectStoreInput::Local)?;
-    let p = base_path.join(BLOBDB_PATH);
-    let sp = base_path.join(SYNC_MAP_PATH);
-
-    if !p.exists() {
-        fs::create_dir_all(&p)?;
+    if opt.is_none() {
+        return Err(
+            "The requested context does not seem to exist or be active, cannot initialize the associated project".into(),
+        );
     }
 
-    let db = BlobsDB::new(&p, &sp, store)?;
+    let (fs, kv) = opt.unwrap();
 
-    Ok(db)
-}
+    // only needed for local fs, object storage
+    // can't create folders
+    if let FilesystemContext::Local { base_directory: _ } = fs {
+        let f = fs.build_fs()?;
+        rt().block_on(async {
+            f.create_dir(BLOBSDB_PREFIX).await?;
+            f.create_dir(HISTORY_PATH).await
+        })?;
+    }
 
-pub fn create_redb(base_path: &Path) -> Result<Database, RedbError> {
-    let db = Database::create(base_path.join(REDB_PATH))?;
-
-    Ok(db)
-}
-
-pub fn initialize<O: io::Write>(directory: Option<&str>, std_out: &mut O) -> Result<(), VerError> {
-    let init_dir = directory.map_or(
-        env::current_dir().expect("Could not infer the current directory"),
-        PathBuf::from,
-    );
-    let _ = init_blobs_db(&init_dir.join(VER_DIRECTORY))?;
-    let _ = create_redb(&init_dir.join(VER_DIRECTORY))?;
-    fs::write(init_dir.join(VER_DIRECTORY).join(SNAPSHOT_HISTORY_FILE), "")?;
-    fs::write(init_dir.join(VER_DIRECTORY).join(HEAD_PATH), "")?;
-
-    writeln!(std_out, "ver repository successfully initialized")?;
+    // only needed for embedded, redis is a separate
+    // process
+    if let KVStoreContext::Embedded { redb_path } = kv {
+        let db = redb::Database::create(redb_path)?;
+        drop(db);
+    }
 
     Ok(())
+}
+
+pub fn init(global: bool) -> Result<(), VerError> {
+    if global {
+        fs::create_dir_all(
+            dirs::home_dir()
+                .expect("Should have a HOME directory")
+                .join(".ver"),
+        )?;
+        return Ok(());
+    }
+
+    init_context(None)
 }

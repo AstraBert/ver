@@ -1,35 +1,32 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    env, fs,
-    io::{self, Write},
+    collections::{HashMap, HashSet},
+    io,
     panic::AssertUnwindSafe,
-    path::PathBuf,
-    str::FromStr,
-    sync::{Arc, mpsc},
+    sync::Arc,
 };
 
-use blobsdb::Chunk;
-use futures_util::FutureExt;
-use redb::{Database, ReadOnlyTable, ReadableDatabase, TableDefinition};
+use blobsdb::{BlobsDBWithFs, Chunk};
+use bytes::Bytes;
+use futures_util::future::FutureExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Semaphore;
 
 use crate::{
-    commons::{get_head, resolve_ver_dir_path, to_text, write_head},
+    commons::{
+        build_context, commit_snapshot, current_fs_kv, get_head, panic_msg, resolve_snapshot_id,
+        rt, run_concurrent,
+    },
+    context::read_context,
     errors::VerError,
-    files::{MAX_INFLIGHT_READS, MAX_INFLIGHT_WRITES, SNAPSHOT_TABLE, Snapshot, panic_msg, rt},
-    init::{REDB_PATH, SNAPSHOT_HISTORY_FILE, VER_DIRECTORY, init_blobs_db},
-    named::{get_snapshot_by_name, name_snapshot},
+    show::to_text,
+    snap::Snapshot,
+    sync::find_common_ancestor,
 };
-
-pub const PARTIAL_MERGES_TABLE: TableDefinition<&str, &[u8]> =
-    TableDefinition::new("partial_merges");
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PartialMerge {
     pub snapshot_id_cur: [u8; 32],
     pub snapshot_id_inc: [u8; 32],
-    pub incoming_path: String,
+    pub incoming_context: String,
     pub clean_merge: Vec<(String, Vec<Chunk>, bool)>,
     pub deleted_paths: Vec<String>,
     pub resolved_paths: Vec<(String, String)>,
@@ -41,7 +38,7 @@ pub struct PartialMerge {
 struct PartialMergeInner {
     snapshot_id_cur: [u8; 32],
     snapshot_id_inc: [u8; 32],
-    incoming_path: String,
+    incoming_context: String,
     clean_merge: Vec<(String, Vec<Chunk>, bool)>,
     deleted_paths: Vec<String>,
     resolved_paths: Vec<(String, String)>,
@@ -55,7 +52,7 @@ impl From<PartialMergeInner> for PartialMerge {
         Self {
             snapshot_id_cur: value.snapshot_id_cur,
             snapshot_id_inc: value.snapshot_id_inc,
-            incoming_path: value.incoming_path,
+            incoming_context: value.incoming_context,
             clean_merge: value.clean_merge,
             deleted_conflicting_paths: value
                 .deleted_conflicting_paths
@@ -83,7 +80,7 @@ impl From<PartialMerge> for PartialMergeInner {
         Self {
             snapshot_id_cur: value.snapshot_id_cur,
             snapshot_id_inc: value.snapshot_id_inc,
-            incoming_path: value.incoming_path,
+            incoming_context: value.incoming_context,
             clean_merge: value.clean_merge,
             deleted_conflicting_paths: value
                 .deleted_conflicting_paths
@@ -104,71 +101,6 @@ impl From<PartialMerge> for PartialMergeInner {
                 .collect(),
         }
     }
-}
-
-fn get_parents(
-    table: &ReadOnlyTable<[u8; 32], &[u8]>,
-    snapshot_id: [u8; 32],
-) -> Result<Vec<[u8; 32]>, VerError> {
-    let snap = table.get(snapshot_id)?;
-    if let Some(s) = snap {
-        let p: Snapshot = postcard::from_bytes(s.value())?;
-        return Ok(p.parent_ids);
-    }
-
-    Err("Could not resolve snapshot ID".into())
-}
-
-fn find_merge_base(
-    table_a: &ReadOnlyTable<[u8; 32], &[u8]>,
-    table_b: &ReadOnlyTable<[u8; 32], &[u8]>,
-    snapshot_id_a: [u8; 32],
-    snapshot_id_b: [u8; 32],
-) -> Result<Option<[u8; 32]>, VerError> {
-    if snapshot_id_a == snapshot_id_b {
-        return Ok(Some(snapshot_id_a));
-    }
-
-    let mut visited_a = HashSet::from([snapshot_id_a]);
-    let mut visited_b = HashSet::from([snapshot_id_b]);
-    let mut frontier_a = VecDeque::from([snapshot_id_a]);
-    let mut frontier_b = VecDeque::from([snapshot_id_b]);
-
-    while !frontier_a.is_empty() || !frontier_b.is_empty() {
-        if !frontier_a.is_empty() {
-            // we know it's not empty
-            let cur_a = frontier_a.pop_front().unwrap();
-            let parents = get_parents(table_a, cur_a)?;
-            for par in parents {
-                if visited_b.contains(&par) {
-                    return Ok(Some(par));
-                }
-                if !visited_a.contains(&par) {
-                    visited_a.insert(par);
-                    frontier_a.push_back(par);
-                }
-            }
-        }
-
-        if !frontier_b.is_empty() {
-            // we know it's not empty
-            let cur_b = frontier_b.pop_front().unwrap();
-            let parents = get_parents(table_b, cur_b)?;
-
-            for par in parents {
-                if visited_a.contains(&par) {
-                    return Ok(Some(par));
-                }
-
-                if !visited_b.contains(&par) {
-                    visited_b.insert(par);
-                    frontier_b.push_back(par);
-                }
-            }
-        }
-    }
-
-    Ok(None)
 }
 
 // get paths in base U ours U theirs
@@ -203,59 +135,50 @@ fn compare_chunks(a: &[Chunk], b: &[Chunk]) -> bool {
 ///
 /// Returns a map from path to the fetched (base, ours, theirs) contents.
 fn fetch_conflict_contents(
-    blobdb_a: &Arc<blobsdb::BlobsDB>,
-    blobdb_b: &Arc<blobsdb::BlobsDB>,
+    blobdb_a: &Arc<blobsdb::BlobsDBWithFs>,
+    blobdb_b: &Arc<blobsdb::BlobsDBWithFs>,
     conflicts: &[(String, Vec<Chunk>, Vec<Chunk>, Vec<Chunk>)], // (path, base_chunks, our_chunks, their_chunks)
 ) -> Result<HashMap<String, (Vec<u8>, Vec<u8>, Vec<u8>)>, VerError> {
-    let sem = Arc::new(Semaphore::new(MAX_INFLIGHT_READS));
-    let (tx, rx) = mpsc::channel::<(usize, Result<(Vec<u8>, Vec<u8>, Vec<u8>), String>)>();
+    let jobs: Vec<(Vec<Chunk>, Vec<Chunk>, Vec<Chunk>)> = conflicts
+        .iter()
+        .map(|(_, base_chunks, our_chunks, their_chunks)| {
+            (
+                base_chunks.clone(),
+                our_chunks.clone(),
+                their_chunks.clone(),
+            )
+        })
+        .collect();
 
-    for (i, (_, base_chunks, our_chunks, their_chunks)) in conflicts.iter().enumerate() {
-        let tx = tx.clone();
-        let permit = rt()
-            .block_on(Arc::clone(&sem).acquire_owned())
-            .expect("semaphore closed");
+    let results = run_concurrent(jobs, {
         let db_a = blobdb_a.clone();
         let db_b = blobdb_b.clone();
-        let base_chunks = Arc::new(base_chunks.clone());
-        let our_chunks = Arc::new(our_chunks.clone());
-        let their_chunks = Arc::new(their_chunks.clone());
-
-        rt().spawn(async move {
-            let _permit = permit;
-            let res = match AssertUnwindSafe(async move {
-                let (base, our, their) = tokio::try_join!(
-                    db_a.get(base_chunks),
-                    db_a.get(our_chunks),
-                    db_b.get(their_chunks),
-                )?;
-                Ok::<_, String>((base, our, their))
-            })
-            .catch_unwind()
-            .await
-            {
-                Ok(r) => r,
-                Err(payload) => Err(panic_msg(payload)),
-            };
-            let _ = tx.send((i, res));
-        });
-    }
-
-    drop(tx);
-
-    let mut out: Vec<Option<_>> = (0..conflicts.len()).map(|_| None).collect();
-    for (i, res) in rx {
-        out[i] = Some(res);
-    }
-    let results = out
-        .into_iter()
-        .map(|slot| slot.unwrap_or(Err("Lost conflict content".to_string())))
-        .collect::<Vec<Result<(Vec<u8>, Vec<u8>, Vec<u8>), String>>>();
+        move |(base_chunks, our_chunks, their_chunks)| {
+            let db_a = db_a.clone();
+            let db_b = db_b.clone();
+            async move {
+                match AssertUnwindSafe(async move {
+                    let (base, our, their) = tokio::try_join!(
+                        db_a.get(Arc::new(base_chunks)),
+                        db_a.get(Arc::new(our_chunks)),
+                        db_b.get(Arc::new(their_chunks)),
+                    )?;
+                    Ok::<_, String>((base, our, their))
+                })
+                .catch_unwind()
+                .await
+                {
+                    Ok(r) => r,
+                    Err(payload) => Err(panic_msg(payload)),
+                }
+            }
+        }
+    })?;
 
     let mut map = HashMap::new();
-    for (i, r) in results.into_iter().enumerate() {
+    for (conflict, r) in conflicts.iter().zip(results) {
         let content = r.map_err(VerError::from)?;
-        map.insert(conflicts[i].0.clone(), content);
+        map.insert(conflict.0.clone(), content);
     }
 
     Ok(map)
@@ -264,245 +187,164 @@ fn fetch_conflict_contents(
 /// Concurrently write merged files to disk and ensure their chunks exist in
 /// the local blob store.
 fn write_merged_files(
-    blobdb_a: &Arc<blobsdb::BlobsDB>,
-    blobdb_b: &Arc<blobsdb::BlobsDB>,
+    blobdb_a: &Arc<blobsdb::BlobsDBWithFs>,
+    blobdb_b: &Arc<blobsdb::BlobsDBWithFs>,
     merge_state: &[(String, Vec<Chunk>, bool)],
 ) -> Result<(), VerError> {
-    let sem = Arc::new(Semaphore::new(MAX_INFLIGHT_READS));
-    let (tx, rx) = mpsc::channel::<(usize, Result<Vec<u8>, String>)>();
+    let jobs: Vec<(Vec<Chunk>, bool)> = merge_state
+        .iter()
+        .map(|(_, chunks, is_ours)| (chunks.clone(), *is_ours))
+        .collect();
 
-    for (i, (_, chunks, is_ours)) in merge_state.iter().enumerate() {
-        let tx = tx.clone();
-        let permit = rt()
-            .block_on(Arc::clone(&sem).acquire_owned())
-            .expect("semaphore closed");
-        let db = if *is_ours {
-            blobdb_a.clone()
-        } else {
-            blobdb_b.clone()
-        };
-        let chunks = Arc::new(chunks.clone());
-
-        rt().spawn(async move {
-            let _permit = permit;
-            let res = match AssertUnwindSafe(async move { db.get(chunks).await })
-                .catch_unwind()
-                .await
-            {
-                Ok(r) => r,
-                Err(payload) => Err(panic_msg(payload)),
-            };
-            let _ = tx.send((i, res));
-        });
-    }
-
-    drop(tx);
-
-    let mut out: Vec<Option<_>> = (0..merge_state.len()).map(|_| None).collect();
-    for (i, res) in rx {
-        out[i] = Some(res);
-    }
-    let results = out
-        .into_iter()
-        .map(|slot| slot.unwrap_or(Err("Lost merged file".to_string())))
-        .collect::<Vec<Result<Vec<u8>, String>>>();
-
-    // Write files serially (fs::write is fast, no need for concurrency)
-    // and collect paths that need to be re-put into blobdb_a
-    let mut paths_to_put: Vec<&str> = vec![];
-    for (i, r) in results.into_iter().enumerate() {
-        let content = r.map_err(VerError::from)?;
-        let (path, _, is_ours) = &merge_state[i];
-        fs::write(path, &content)?;
-        if !is_ours {
-            paths_to_put.push(path);
-        }
-    }
-
-    // Concurrently put files from the other repo into our blob store
-    if !paths_to_put.is_empty() {
-        let sem = Arc::new(Semaphore::new(MAX_INFLIGHT_WRITES));
-        let (tx, rx) = mpsc::channel::<(usize, Result<Vec<Chunk>, String>)>();
-
-        for (i, path) in paths_to_put.iter().enumerate() {
-            let tx = tx.clone();
-            let permit = rt()
-                .block_on(Arc::clone(&sem).acquire_owned())
-                .expect("semaphore closed");
-            let db = blobdb_a.clone();
-            let path = path.to_string();
-
-            rt().spawn(async move {
-                let _permit = permit;
-                let res = match AssertUnwindSafe(async move { db.put(&path).await })
+    let results = run_concurrent(jobs, {
+        let db_a = blobdb_a.clone();
+        let db_b = blobdb_b.clone();
+        move |(chunks, is_ours)| {
+            let db = if is_ours { db_a.clone() } else { db_b.clone() };
+            async move {
+                match AssertUnwindSafe(async move { db.get(Arc::new(chunks)).await })
                     .catch_unwind()
                     .await
                 {
                     Ok(r) => r,
                     Err(payload) => Err(panic_msg(payload)),
-                };
-                let _ = tx.send((i, res));
-            });
+                }
+            }
         }
+    })?;
 
-        drop(tx);
-
-        let mut out: Vec<Option<_>> = (0..paths_to_put.len()).map(|_| None).collect();
-        for (i, res) in rx {
-            out[i] = Some(res);
+    // Write files serially (fs::write is fast, no need for concurrency)
+    // and collect paths that need to be re-put into blobdb_a
+    let mut paths_to_put: Vec<&str> = vec![];
+    rt().block_on(async {
+        for ((path, _, is_ours), r) in merge_state.iter().zip(results) {
+            let content = r.map_err(VerError::from)?;
+            blobdb_a.fs.write(path, Bytes::from_owner(content)).await?;
+            if !is_ours {
+                paths_to_put.push(path);
+            }
         }
-        for slot in out {
-            slot.unwrap_or(Err("Lost put result".to_string()))
-                .map_err(VerError::from)?;
-        }
-    }
+        Ok::<(), VerError>(())
+    })?;
 
+    // Concurrently put files from the other repo into our blob store
+    put_paths(blobdb_a, &paths_to_put)?;
     Ok(())
+}
+
+/// Concurrently put files from disk into the blob store, returning the
+/// resulting chunks per path (in the same order as `paths`).
+fn put_paths(
+    blobdb: &Arc<blobsdb::BlobsDBWithFs>,
+    paths: &[&str],
+) -> Result<Vec<Vec<Chunk>>, VerError> {
+    let jobs: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+    let results = run_concurrent(jobs, {
+        let db = blobdb.clone();
+        move |path| {
+            let db = db.clone();
+            async move {
+                match AssertUnwindSafe(async move { db.put(&path).await })
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(payload) => Err(panic_msg(payload)),
+                }
+            }
+        }
+    })?;
+
+    results
+        .into_iter()
+        .map(|r| r.map_err(VerError::from))
+        .collect()
 }
 
 /// Concurrently write resolved files to disk and put them into the blob store.
 /// Returns the repo_state entries for resolved paths.
 fn write_resolved_files(
-    blobdb_a: &Arc<blobsdb::BlobsDB>,
+    blobdb_a: &Arc<blobsdb::BlobsDBWithFs>,
     resolved_paths: &[(String, String)],
 ) -> Result<Vec<(String, Vec<Chunk>)>, VerError> {
     // Write resolved files to disk first
-    for (path, content) in resolved_paths {
-        fs::write(path, content.as_bytes())?;
-    }
+    rt().block_on(async {
+        for (path, content) in resolved_paths {
+            blobdb_a
+                .fs
+                .write(path, Bytes::copy_from_slice(content.as_bytes()))
+                .await?;
+        }
+        Ok::<(), VerError>(())
+    })?;
 
     // Concurrently put them into the blob store
-    let sem = Arc::new(Semaphore::new(MAX_INFLIGHT_WRITES));
-    let (tx, rx) = mpsc::channel::<(usize, Result<Vec<Chunk>, String>)>();
+    let paths: Vec<&str> = resolved_paths.iter().map(|(p, _)| p.as_str()).collect();
+    let chunks = put_paths(blobdb_a, &paths)?;
 
-    for (i, (path, _)) in resolved_paths.iter().enumerate() {
-        let tx = tx.clone();
-        let permit = rt()
-            .block_on(Arc::clone(&sem).acquire_owned())
-            .expect("semaphore closed");
-        let db = blobdb_a.clone();
-        let path = path.clone();
-
-        rt().spawn(async move {
-            let _permit = permit;
-            let res = match AssertUnwindSafe(async move { db.put(&path).await })
-                .catch_unwind()
-                .await
-            {
-                Ok(r) => r,
-                Err(payload) => Err(panic_msg(payload)),
-            };
-            let _ = tx.send((i, res));
-        });
-    }
-
-    drop(tx);
-
-    let mut out: Vec<Option<_>> = (0..resolved_paths.len()).map(|_| None).collect();
-    for (i, res) in rx {
-        out[i] = Some(res);
-    }
-    let results = out
-        .into_iter()
-        .map(|slot| slot.unwrap_or(Err("Lost resolved file put".to_string())))
-        .collect::<Vec<Result<Vec<Chunk>, String>>>();
-
-    let mut entries = vec![];
-    for (i, r) in results.into_iter().enumerate() {
-        let chunks = r.map_err(VerError::from)?;
-        entries.push((resolved_paths[i].0.clone(), chunks));
-    }
-
-    Ok(entries)
+    Ok(resolved_paths
+        .iter()
+        .map(|(p, _)| p.clone())
+        .zip(chunks)
+        .collect())
 }
 
 pub fn merge_run<O: io::Write, E: io::Write>(
-    other_repo: PathBuf,
+    other_context: String,
     name: &str,
     snapshot_id_cur: Option<String>,
     snapshot_id_inc: Option<String>,
     std_out: &mut O,
     std_err: &mut E,
 ) -> Result<(), VerError> {
-    let resolved = resolve_ver_dir_path(env::current_dir()?)?;
+    let ctx = read_context()?;
+    let (fs_a, kv_a) = current_fs_kv()?;
+    let (fs_b, kv_b) = build_context(ctx.get_context(&other_context).ok(), &other_context)?;
 
-    let blobdb_a = Arc::new(init_blobs_db(&resolved)?);
-    let blobdb_b = Arc::new(init_blobs_db(&other_repo.join(VER_DIRECTORY))?);
-
-    let redb_a = Database::open(resolved.join(REDB_PATH))?;
-    let redb_b = Database::open(other_repo.join(VER_DIRECTORY).join(REDB_PATH))?;
-
-    let txa = redb_a.begin_read()?;
-    let table_a = txa.open_table(SNAPSHOT_TABLE)?;
-
-    let txb = redb_b.begin_read()?;
-    let table_b = txb.open_table(SNAPSHOT_TABLE)?;
+    let blobdb_a = Arc::new(BlobsDBWithFs::new(fs_a.clone()));
+    let blobdb_b = Arc::new(BlobsDBWithFs::new(fs_b.clone()));
 
     let (snapshot_id_a, snapshot_id_b) = if let Some(ref cur) = snapshot_id_cur
         && let Some(ref inc) = snapshot_id_inc
     {
-        let maybe_hash_cur = blake3::Hash::from_str(cur);
-
-        let hash_cur = match maybe_hash_cur {
-            Ok(h) => h.as_bytes().to_owned(),
-            Err(_) => get_snapshot_by_name(&redb_a, cur)?,
-        };
-
-        let maybe_hash_inc = blake3::Hash::from_str(inc);
-
-        let hash_inc = match maybe_hash_inc {
-            Ok(h) => h.as_bytes().to_owned(),
-            Err(_) => get_snapshot_by_name(&redb_b, inc)?,
-        };
-
-        (hash_cur, hash_inc)
+        (
+            resolve_snapshot_id(cur, &kv_a)?,
+            resolve_snapshot_id(inc, &kv_b)?,
+        )
     } else if snapshot_id_cur.is_none() && snapshot_id_inc.is_none() {
         (
-            get_head(&resolved)?.expect("Should have at least one entry"),
-            get_head(&other_repo.join(VER_DIRECTORY))?.expect("Should have at least one entry"),
+            get_head(&fs_a)?.expect("Should have at least one entry"),
+            get_head(&fs_b)?.expect("Should have at least one entry"),
         )
     } else if let Some(ref cur) = (snapshot_id_cur)
         && snapshot_id_inc.is_none()
     {
-        let maybe_hash_cur = blake3::Hash::from_str(cur);
-
-        let hash_cur = match maybe_hash_cur {
-            Ok(h) => h.as_bytes().to_owned(),
-            Err(_) => get_snapshot_by_name(&redb_a, cur)?,
-        };
         (
-            hash_cur,
-            get_head(&other_repo.join(VER_DIRECTORY))?.expect("Should have at least one entry"),
+            resolve_snapshot_id(cur, &kv_a)?,
+            get_head(&fs_b)?.expect("Should have at least one entry"),
         )
     } else {
-        let inc = snapshot_id_inc.as_deref().unwrap();
-        let maybe_hash_inc = blake3::Hash::from_str(inc);
-
-        let hash_inc = match maybe_hash_inc {
-            Ok(h) => h.as_bytes().to_owned(),
-            Err(_) => get_snapshot_by_name(&redb_b, inc)?,
-        };
         (
-            get_head(&resolved)?.expect("Should have at least one entry"),
-            hash_inc,
+            get_head(&fs_a)?.expect("Should have at least one entry"),
+            resolve_snapshot_id(snapshot_id_inc.as_deref().unwrap(), &kv_b)?,
         )
     };
 
-    let opt_a = table_a.get(snapshot_id_a)?;
-    let opt_b = table_b.get(snapshot_id_b)?;
+    let opt_a = kv_a.get_snapshot(snapshot_id_a)?;
+    let opt_b = kv_b.get_snapshot(snapshot_id_b)?;
 
     if let Some(snap_ac) = opt_a
         && let Some(snap_bc) = opt_b
     {
-        let opt_base = find_merge_base(&table_a, &table_b, snapshot_id_a, snapshot_id_b)?;
+        let (opt_base, _, _) = find_common_ancestor(&kv_a, &kv_b, snapshot_id_a, snapshot_id_b)?;
 
         if let Some(base) = opt_base {
-            let snap_basec = table_a.get(base)?.expect(
+            let snap_basec = kv_a.get_snapshot(base)?.expect(
                 "Base should be contained in the snapshots table, since it was already found",
             );
-            let ours: Snapshot = postcard::from_bytes(snap_ac.value())?;
-            let theirs: Snapshot = postcard::from_bytes(snap_bc.value())?;
-            let commons: Snapshot = postcard::from_bytes(snap_basec.value())?;
+            let ours: Snapshot = postcard::from_bytes(&snap_ac)?;
+            let theirs: Snapshot = postcard::from_bytes(&snap_bc)?;
+            let commons: Snapshot = postcard::from_bytes(&snap_basec)?;
 
             let union_paths = get_union_paths(&commons, &ours, &theirs);
 
@@ -661,12 +503,12 @@ pub fn merge_run<O: io::Write, E: io::Write>(
                     repo_state.insert(path.clone(), chunks.clone());
                 }
 
-                for d in &deleted_paths {
-                    let res = fs::remove_file(d);
-                    if res.is_err_and(|e| matches!(e.kind(), io::ErrorKind::NotFound)) {
-                        continue;
+                rt().block_on(async {
+                    for d in &deleted_paths {
+                        fs_a.delete(d).await?;
                     }
-                }
+                    Ok::<(), VerError>(())
+                })?;
 
                 for n in &resolved_paths {
                     writeln!(std_out, "Automatically resolved conflict on {}", n.0)?;
@@ -680,36 +522,21 @@ pub fn merge_run<O: io::Write, E: io::Write>(
                 let snap = Snapshot {
                     repository_state: repo_state,
                     parent_ids: vec![snapshot_id_a, snapshot_id_b],
+                    partial: false,
                 };
-                let to_insert = postcard::to_allocvec(&snap)?;
-                let snap_hash = blake3::hash(&to_insert);
 
-                let wtx = redb_a.begin_write()?;
-                {
-                    let mut snap_table = wtx.open_table(SNAPSHOT_TABLE)?;
-                    snap_table.insert(snap_hash.as_bytes().to_owned(), to_insert.as_slice())?;
-                }
-                wtx.commit()?;
-
-                write_head(&resolved, &snap_hash)?;
-
-                let mut fl = fs::OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open(resolved.join(SNAPSHOT_HISTORY_FILE))?;
-
-                writeln!(
-                    fl,
-                    "{} - {} ({}): merged repository at {} with {:?} at snapshot ID {}",
-                    chrono::Utc::now().format("%d/%m/%Y %H:%M:%S"),
+                let snap_hash = commit_snapshot(
+                    &snap,
                     name,
-                    snap_hash,
-                    blake3::Hash::from_bytes(snapshot_id_a),
-                    other_repo,
-                    blake3::Hash::from_bytes(snapshot_id_b),
+                    Some(&format!(
+                        "merged repository at {} with {} at snapshot ID {}",
+                        blake3::Hash::from_bytes(snapshot_id_a),
+                        other_context,
+                        blake3::Hash::from_bytes(snapshot_id_b)
+                    )),
+                    &fs_a,
+                    &kv_a,
                 )?;
-
-                name_snapshot(&redb_a, snap_hash.as_bytes().to_owned(), name)?;
 
                 writeln!(
                     std_out,
@@ -771,7 +598,7 @@ pub fn merge_run<O: io::Write, E: io::Write>(
                 let partial_merge: PartialMerge = PartialMergeInner {
                     snapshot_id_cur: snapshot_id_a,
                     snapshot_id_inc: snapshot_id_b,
-                    incoming_path: other_repo.to_string_lossy().to_string(),
+                    incoming_context: other_context,
                     clean_merge: merge_state,
                     added_conflicting_paths,
                     deleted_conflicting_paths,
@@ -782,13 +609,7 @@ pub fn merge_run<O: io::Write, E: io::Write>(
                 .into();
 
                 let compressed = postcard::to_allocvec(&partial_merge)?;
-
-                let wtx = redb_a.begin_write()?;
-                {
-                    let mut merge_table = wtx.open_table(PARTIAL_MERGES_TABLE)?;
-                    merge_table.insert(name, compressed.as_slice())?;
-                }
-                wtx.commit()?;
+                kv_a.put_merge(name, compressed.as_slice())?;
 
                 return Ok(());
             }
@@ -809,16 +630,11 @@ pub fn merge_pick<O: io::Write, E: io::Write>(
     std_out: &mut O,
     std_err: &mut E,
 ) -> Result<(), VerError> {
-    let resolved = resolve_ver_dir_path(env::current_dir()?)?;
-
-    let redb = Database::open(resolved.join(REDB_PATH))?;
-
-    let rtx = redb.begin_read()?;
-    let table = rtx.open_table(PARTIAL_MERGES_TABLE)?;
-    let opt = table.get(name)?;
+    let (_, kv) = current_fs_kv()?;
+    let opt = kv.get_merge(name)?;
 
     if let Some(compressed) = opt {
-        let partial_merge: PartialMerge = postcard::from_bytes(compressed.value())?;
+        let partial_merge: PartialMerge = postcard::from_bytes(&compressed)?;
         let mut inner = PartialMergeInner::from(partial_merge);
         for path in use_ours {
             let path_owned = path.to_string();
@@ -878,12 +694,7 @@ pub fn merge_pick<O: io::Write, E: io::Write>(
         }
         let new_merge = PartialMerge::from(inner);
         let new_compressed = postcard::to_allocvec(&new_merge)?;
-        let wtx = redb.begin_write()?;
-        {
-            let mut tb = wtx.open_table(PARTIAL_MERGES_TABLE)?;
-            tb.insert(name, new_compressed.as_slice())?;
-        }
-        wtx.commit()?;
+        kv.put_merge(name, &new_compressed)?;
 
         writeln!(std_out, "Successfully applied merge picks")?;
         return Ok(());
@@ -897,16 +708,12 @@ pub fn merge_end<O: io::Write, E: io::Write>(
     std_out: &mut O,
     std_err: &mut E,
 ) -> Result<(), VerError> {
-    let resolved = resolve_ver_dir_path(env::current_dir()?)?;
-
-    let redb_a = Database::open(resolved.join(REDB_PATH))?;
-
-    let rtx = redb_a.begin_read()?;
-    let table = rtx.open_table(PARTIAL_MERGES_TABLE)?;
-    let opt = table.get(name)?;
+    let ctx = read_context()?;
+    let (fs_a, kv_a) = current_fs_kv()?;
+    let opt = kv_a.get_merge(name)?;
 
     if let Some(compressed) = opt {
-        let partial_merge: PartialMerge = postcard::from_bytes(compressed.value())?;
+        let partial_merge: PartialMerge = postcard::from_bytes(&compressed)?;
 
         if !partial_merge.added_conflicting_paths.is_empty()
             || !partial_merge.deleted_conflicting_paths.is_empty()
@@ -963,10 +770,11 @@ pub fn merge_end<O: io::Write, E: io::Write>(
         }
 
         let inner = PartialMergeInner::from(partial_merge);
-        let other_repo = PathBuf::from(&inner.incoming_path);
+        let (fs_des_b, _) = ctx.get_context(&inner.incoming_context)?;
+        let fs_b = fs_des_b.build_fs()?;
 
-        let blobdb_a = Arc::new(init_blobs_db(&resolved)?);
-        let blobdb_b = Arc::new(init_blobs_db(&other_repo.join(VER_DIRECTORY))?);
+        let blobdb_a = Arc::new(BlobsDBWithFs::new(fs_a.clone()));
+        let blobdb_b = Arc::new(BlobsDBWithFs::new(fs_b.clone()));
 
         let mut repo_state: HashMap<String, Vec<Chunk>> = HashMap::new();
 
@@ -976,12 +784,12 @@ pub fn merge_end<O: io::Write, E: io::Write>(
             repo_state.insert(path.clone(), chunks.clone());
         }
 
-        for d in &inner.deleted_paths {
-            let res = fs::remove_file(d);
-            if res.is_err_and(|e| matches!(e.kind(), io::ErrorKind::NotFound)) {
-                continue;
+        rt().block_on(async {
+            for d in &inner.deleted_paths {
+                fs_a.delete(d).await?;
             }
-        }
+            Ok::<(), VerError>(())
+        })?;
 
         for n in &inner.resolved_paths {
             writeln!(std_out, "Automatically resolved conflict on {}", n.0)?;
@@ -995,45 +803,23 @@ pub fn merge_end<O: io::Write, E: io::Write>(
         let snap = Snapshot {
             repository_state: repo_state,
             parent_ids: vec![inner.snapshot_id_cur, inner.snapshot_id_inc],
+            partial: false,
         };
-        let to_insert = postcard::to_allocvec(&snap)?;
-        let snap_hash = blake3::hash(&to_insert);
 
-        let wtx = redb_a.begin_write()?;
-        {
-            let mut snap_table = wtx.open_table(SNAPSHOT_TABLE)?;
-            snap_table.insert(snap_hash.as_bytes().to_owned(), to_insert.as_slice())?;
-        }
-        wtx.commit()?;
-
-        write_head(&resolved, &snap_hash)?;
-
-        let mut fl = fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(resolved.join(SNAPSHOT_HISTORY_FILE))?;
-
-        writeln!(
-            fl,
-            "{} - {} ({}): merged repository at {} with {:?} at snapshot ID {}",
-            chrono::Utc::now().format("%d/%m/%Y %H:%M:%S"),
+        let snap_hash = commit_snapshot(
+            &snap,
             name,
-            snap_hash,
-            blake3::Hash::from_bytes(inner.snapshot_id_cur),
-            other_repo,
-            blake3::Hash::from_bytes(inner.snapshot_id_inc),
+            Some(&format!(
+                "merged repository at {} with {:?} at snapshot ID {}",
+                blake3::Hash::from_bytes(inner.snapshot_id_cur),
+                inner.incoming_context,
+                blake3::Hash::from_bytes(inner.snapshot_id_inc),
+            )),
+            &fs_a,
+            &kv_a,
         )?;
 
-        name_snapshot(&redb_a, snap_hash.as_bytes().to_owned(), name)?;
-
-        let mtx = redb_a.begin_write()?;
-        {
-            let mut mtb = mtx.open_table(PARTIAL_MERGES_TABLE)?;
-            // remove partial merge state,
-            // no longer needed
-            mtb.remove(name)?;
-        }
-        mtx.commit()?;
+        kv_a.delete_merge(name)?;
 
         writeln!(
             std_out,

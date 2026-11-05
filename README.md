@@ -1,20 +1,20 @@
 # ver
 
-**A new spring for version control.**
+**A new spring for version control**
 
 > **Alpha release**: expect rough edges, breaking changes, and missing features. Use at your own risk.
 
-`ver` (from the Latin _ver_, "spring") is an intuitive, easy-to-use, and non-git-like version control system. It tracks your files as content-defined chunks, stores them in a local content-addressable store, and can sync to S3, GCS, or Azure Blob Storage.
+`ver` (from the Latin _ver_, "spring") is an intuitive, easy-to-use, and non-git-like version control system. It tracks your files as content-defined chunks, stores them in a content-addressable blob store, and syncs to S3, GCS, or Azure Blob Storage.
+
+Full documentation: https://ver-vcs.net
 
 ## Installation
-
-### Pre-built binaries
 
 ```sh
 cargo install ver-vcs
 ```
 
-### Build from source
+Or build from source:
 
 ```sh
 git clone https://github.com/AstraBert/ver.git
@@ -22,19 +22,34 @@ cd ver
 cargo install --path crates/ver
 ```
 
+### Agent skill
+
+Install the `ver` skill so your coding agent knows how to use it:
+
+```sh
+npx skills add AstraBert/ver
+```
+
+Or paste this into your agent: `Install and set up ver from https://ver-vcs.net/llms.txt`
+
 ## Quick start
 
 ```sh
-# Initialize a repository
-ver init
+# Create ~/.ver/, where your contexts live
+ver ctx init --global
 
-# Create some files and take a snapshot
+# Scaffold a local context, then fill in the paths in ~/.ver/contexts.toml
+ver ctx scaffold myproject --fs local --kv embedded
+ver ctx switch myproject
+ver ctx init
+
+# Take a snapshot
 echo "hello" > hello.txt
-ver snap my-first-snapshot
+ver snap full --name my-first-snapshot
 
-# Make changes and snapshot again
+# Change something and snapshot again
 echo "world" >> hello.txt
-ver snap my-second-snapshot
+ver snap full --name my-second-snapshot
 
 # View history
 ver log
@@ -42,96 +57,71 @@ ver log
 # Go back to the first snapshot
 ver goto my-first-snapshot
 
-# See what a file looks like at a snapshot
-ver show hello.txt -s my-second-snapshot
-
-# Diff a file between snapshots
-ver diff hello.txt -a my-second-snapshot
+# See a file at a snapshot, and diff it against another
+ver show hello.txt --snapshot my-second-snapshot
+ver diff hello.txt --base my-first-snapshot --head my-second-snapshot
 ```
+
+## Concepts
+
+- **Contexts** pair a filesystem backend (local disk, S3, GCS, Azure) with a KV backend (embedded redb, or Redis). They are declared in `~/.ver/contexts.toml`, and every command runs against the current one. An embedded KV only pairs with a local filesystem.
+- **Snapshots** map file paths to lists of chunks. Their ID is a BLAKE3 hash, and names are pointers to IDs; you can use either on the CLI. There is no staging area and no branches.
+- **Chunks** come from FastCDC content-defined chunking, are hashed with BLAKE3, and are stored zstd-compressed. Identical content is never stored twice.
 
 ## Command reference
 
-### `ver init [directory]`
+Every command operates on the current context unless it takes another context by name. Snapshot arguments accept a name or an ID.
 
-Initialize a new ver repository. Creates a `.ver/` directory containing the content-addressable blob store, snapshot database, and history file. Defaults to the current directory.
+### `ver ctx`
 
-### `ver snap <name> [-d description]`
+| Command | Description |
+| --- | --- |
+| `ver ctx init [--global]` | With `--global`, create `~/.ver/`. Without, initialize the project of the current context. |
+| `ver ctx scaffold <name> --fs <local\|s3\|gcs\|azure> --kv <embedded\|redis>` | Add an empty context to `contexts.toml`. |
+| `ver ctx switch <name>` | Make a context current. |
+| `ver ctx delete <name>` | Remove a context (not the current one). |
+| `ver ctx show [--json]` | Print the current context. |
+| `ver ctx list [--json]` | List all contexts. |
 
-Create a snapshot of the current repository state. All tracked files are chunked, hashed, and stored. The snapshot is recorded with the given name and an optional description.
+### `ver snap`
 
-### `ver goto <snapshot-id-or-name> [paths...]`
+| Command | Description |
+| --- | --- |
+| `ver snap full --name <name> [--description <text>]` | Snapshot every tracked file. |
+| `ver snap from --name <name> [--description <text>] --file <path>...` | Snapshot only the given files (partial snapshot). |
+| `ver snap patch --identifier <name-or-id> --file <path>...` | Add or update files in an existing snapshot. |
 
-Restore the repository to the state captured in a snapshot. Optionally pass specific file/directory paths to only revert those. Files not present in the snapshot are deleted.
+### `ver goto <name-or-id> [--path <path>...] [--no-delete]`
 
-### `ver log [--head N]`
+Restore the project to a snapshot, or only the given paths. For full snapshots, files missing from the snapshot are deleted unless `--no-delete` is passed.
 
-Show the snapshot history in reverse chronological order. Use `--head N` to limit output to the last N entries.
+### `ver log [--limit <n>] [--incomplete-ok]`
 
-### `ver show <path> [-s snapshot] [-o offset] [-l limit]`
+Print snapshot history, newest first.
 
-Print the content of a file at a given snapshot (defaults to current HEAD). Supports byte offset and limit for large files. Binary files are hex-dumped.
+### `ver show <path> [--snapshot <name-or-id>] [--offset <n>] [--limit <n>]`
 
-### `ver diff <path> [-f from] -a <against>`
+Print a file at a snapshot (default: current head). Binary files are hex-dumped.
 
-Show a unified diff of a file between two snapshots. `from` defaults to the current HEAD.
+### `ver diff <path> --base <name-or-id> [--head <name-or-id>]`
 
-### `ver cp <snapshot-id-or-name> <destination>`
+Unified diff of a file between two snapshots. `--head` defaults to the current head.
 
-Copy the repository at a specific snapshot to a new directory. The destination is created if it doesn't exist.
+### `ver sync --target <context> [--source <context>] [--from-scratch]`
 
-### `ver merge run <name> --from <repo-path> [-o our-snapshot] [-t their-snapshot]`
+Copy snapshots from the source (default: current context) to the target. `--from-scratch` bulk-copies everything into an empty target; otherwise only missing snapshots are transferred. Refuses when histories have diverged; merge instead.
 
-Start a merge between the current repository and another ver repository. Defaults to the latest snapshots on both sides.
+### `ver merge`
 
-### `ver merge pick <name> [-o paths...] [-t paths...]`
-
-Resolve merge conflicts by picking "our" or "their" version for specific file paths.
-
-### `ver merge end <name>`
-
-Finalize a merge after all conflicts have been resolved.
-
-### `ver sync <backend> <remote-name> [options...]`
-
-Sync the local repository to remote object storage. Only new snapshots (those not already on the remote) are uploaded. Supported backends:
-
-- `ver sync s3`: Amazon S3 (or S3-compatible like MinIO)
-- `ver sync gcs`: Google Cloud Storage
-- `ver sync azure`: Azure Blob Storage
-
-All backends accept credentials via flags or environment variables. Prefix any value with `secrets/` to load it from local secrets.
-
-### `ver clone <backend> <remote-name> <dest> [options...]`
-
-Clone a repository from remote object storage into a local directory. Downloads all chunks, reconstructs files, and sets up the `.ver/` directory. Same backends and credential options as `sync`.
-
-### `ver secrets init <recipient-name> [-k key-file]`
-
-Initialize secrets management. Generates an x25519 age key pair for encrypting secrets, or uses an existing key file.
-
-### `ver secrets set <name> <value>`
-
-Store an encrypted secret in `.versecrets.json` at the repository root.
-
-### `ver secrets get <name> [-k key-file]`
-
-Retrieve and decrypt a secret.
-
-### `ver secrets add-recipient <name> <public-key> [-k key-file]`
-
-Add a new recipient who can decrypt the repository's secrets.
+| Command | Description |
+| --- | --- |
+| `ver merge run <name> --from <context> [--our-snapshot <id>] [--their-snapshot <id>]` | Three-way merge another context into the current one. |
+| `ver merge pick <name> [--our <path>...] [--their <path>...]` | Resolve conflicts by picking a side. |
+| `ver merge end <name>` | Finalize a fully resolved merge. |
 
 ## Ignoring files
 
-Create a `.verignore` file in the repository root. It follows the same syntax as `.gitignore`.
-
-## How it works
-
-- Files are split into content-defined chunks using FastCDC
-- Chunks are hashed with BLAKE3 and stored compressed (zstd) in `.ver/blobs/`
-- Snapshots are stored in an embedded [redb](https://github.com/cberner/redb) database
-- Syncing uploads only the chunks that the remote is missing
-- Cloning downloads chunks and reconstructs files from the snapshot graph
+Create a `.verignore` file at the project root. It follows `.gitignore` syntax. The `.ver/` directory is always excluded.
 
 ## Roadmap
 

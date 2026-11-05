@@ -1,0 +1,16 @@
+[package]
+name = "ver-kv"
+version = "0.1.0"
+edition = "2024"
+readme = "README.md"
+description = "Key-value store trait and implementation for ver"
+license = "MIT"
+
+[dependencies]
+redis = { workspace = true }
+redb = { workspace = true }
+bytes = { workspace = true }
+blake3 = { workspace = true }
+
+[dev-dependencies]
+tempdir = "0.3.7"

@@ -1,0 +1,92 @@
+---
+title: Getting started
+description: Install ver, initialize it, and take your first snapshot.
+sidebar:
+  order: 1
+---
+
+This page takes you from nothing to a working ver setup with one local context and one snapshot.
+
+## Install
+
+<Tabs syncKey="install">
+  <TabItem label="crates.io">
+    ```sh
+    cargo install ver-vcs
+    ```
+  </TabItem>
+  <TabItem label="From source">
+    ```sh
+    git clone https://github.com/AstraBert/ver.git
+    cd ver
+    cargo install --path crates/ver
+    ```
+  </TabItem>
+</Tabs>
+
+## Initialize ver globally
+
+```sh
+ver ctx init --global
+```
+
+This creates `~/.ver/`, the home of `contexts.toml`, the file where all your contexts are registered.
+
+## Create a context
+
+A context pairs a **filesystem backend** (where blobs and history live) with a **KV backend** (where snapshots and names live). Scaffold one:
+
+```sh
+ver ctx scaffold myproject --fs local --kv embedded
+```
+
+This adds an empty `myproject` entry to `~/.ver/contexts.toml`. Fill in the paths:
+
+```toml title="~/.ver/contexts.toml"
+current = "myproject"
+
+[fs.myproject]
+base_directory = "/absolute/path/to/myproject"
+
+[kv.myproject]
+redb_path = "/absolute/path/to/myproject/.ver/kv.redb"
+```
+
+<Aside type="caution" title="Absolute paths only">
+  `base_directory` and `redb_path` must be absolute. ver validates the file every time it reads it and refuses to run against relative paths.
+</Aside>
+
+Switch to the context and initialize the project:
+
+```sh
+ver ctx switch myproject
+ver ctx init
+```
+
+`ver ctx init` creates the `.ver/blobsdb/` and `.ver/snapshots_history/` directories under the context's base directory, and the redb database file.
+
+## Take your first snapshot
+
+```sh
+cd /absolute/path/to/myproject
+echo "hello" > hello.txt
+ver snap full --name my-first-snapshot
+```
+
+ver chunks every tracked file, stores the chunks in the blob store, and records the snapshot under the name you gave it.
+
+## See it work
+
+```sh
+ver log                              # snapshot history
+echo "world" >> hello.txt
+ver snap full --name second          # another snapshot
+ver goto my-first-snapshot           # restore the first state
+cat hello.txt                        # -> "hello"
+```
+
+## Next steps
+
+- Add a `.verignore` file (same syntax as `.gitignore`) to exclude files from snapshots.
+- Set up a second context backed by object storage and [sync](/guides/syncing/) your snapshots to it.
+- Read the [concepts](/concepts/) page to understand what ver just stored.

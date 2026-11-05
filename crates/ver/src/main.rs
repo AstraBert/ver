@@ -1,42 +1,88 @@
-use std::io;
+use std::{borrow::Cow, io};
 
-use blobsdb::GetObjectStoreInput;
 use clap::{Parser, Subcommand};
-
-#[cfg(feature = "minus")]
-use ver::commons;
 use ver::{
-    clone::clone_from_remote,
-    commons::unwrap_maybe_secret,
-    cp::copy as ver_copy,
-    diff::diff_file,
+    commons::PagerWriter,
+    context::{FSType, KVType, read_context},
+    diff::diff,
     errors::VerError,
-    files::{goto, snap},
-    init::initialize,
+    goto::goto,
+    init::init,
     log::log,
     merge::{merge_end, merge_pick, merge_run},
-    secrets::{add_recipient, get_secret, init_secrets, set_secret},
     show::show_file,
-    sync::sync_with_remote_storage,
+    snap::{files_snap, full_snap},
+    sync::sync,
 };
+
+#[derive(Debug, Subcommand)]
+enum ContextCommands {
+    /// Scaffold a new context
+    /// in the ~/.ver/contexts.toml
+    /// file.
+    Scaffold {
+        /// Name of the context
+        context_name: String,
+        /// Filesystem backend to scaffold for
+        #[arg(long, short)]
+        fs: FSType,
+        /// Key-value store backend to scaffold for
+        #[arg(long, short)]
+        kv: KVType,
+    },
+    /// Switch to a new context
+    Switch {
+        /// Name of the context to switch to
+        context_name: String,
+    },
+    /// Delete a context
+    Delete {
+        /// Name of the context to delete
+        context_name: String,
+    },
+    /// Show the current context
+    Show {
+        /// Whether to display the full context spec
+        /// as JSON. If disabled, only displays the name
+        /// of the context.
+        #[arg(long, short, default_value_t = false)]
+        json: bool,
+    },
+    /// List all the available contexts
+    List {
+        /// Whether to display the full context spec
+        /// as JSON. If disabled, only displays the name
+        /// of the context.
+        #[arg(long, short, default_value_t = false)]
+        json: bool,
+    },
+    /// Initialize ver (globally or for the current context).
+    Init {
+        /// Initialize ver globally. If not provided, it will
+        /// try to initializa the project associated
+        /// with the current context
+        #[arg(long, short, default_value_t = false)]
+        global: bool,
+    },
+}
 
 #[derive(Debug, Subcommand)]
 enum MergeCommands {
     /// Run a merge between the
-    /// current ver repository
-    /// and another repository,
+    /// current ver context
+    /// and another context on the same project,
     /// starting from their latest snapshot
     /// ID or from a provided ID/name.
     Run {
         /// Name of this
         /// merge run
         name: String,
-        /// Repository the incoming
-        /// merge is from
+        /// Target context
+        /// for the merge run
         #[arg(short, long)]
         from: String,
         /// Snapshot ID or name
-        /// from the current repository
+        /// from the current project
         #[arg(short, long, default_value = None)]
         our_snapshot: Option<String>,
         /// Snapshot ID or name
@@ -78,372 +124,143 @@ enum MergeCommands {
     },
 }
 
-/// Secrets-related subcommands
 #[derive(Debug, Subcommand)]
-enum SecretsCommands {
-    /// Initialize secrets management
-    /// for ver globally.
-    /// If you need multiple secrets
-    /// managed with different keys,
-    /// provide `--key-file`, otherwise
-    /// a global key pair will be provisioned
-    /// to manage all ver secrets.
-    Init {
-        /// Name of the recipient identity
-        /// to associate with the
-        /// key
-        recipient_name: String,
-        /// File where a x25519 age key pair
-        /// is stored. Leave empty to generate
-        /// a new key pair for global
-        /// management of ver-related secrets.
+enum SnapCommands {
+    /// Take a full snapshot of the project
+    Full {
+        /// Name of the snapshot
+        #[arg(long, short)]
+        name: String,
+        /// Description of the snapshot
         #[arg(long, short, default_value = None)]
-        key_file: Option<String>,
+        description: Option<String>,
     },
-    /// Set a secret locally in your repository.
-    /// Creates .versecrets.json at the root
-    /// of your repository if it does not already
-    /// exists
-    Set {
-        /// Secret name
-        secret_name: String,
-        /// Secret value
-        secret_value: String,
+    /// Patch an existing snapshot by adding files to it
+    Patch {
+        /// Name or ID of the snapshot
+        #[arg(long, short)]
+        identifier: String,
+        /// File to be added to the snapshot.
+        /// Can be used multiple times
+        #[arg(long, short)]
+        file: Vec<String>,
     },
-    /// Get the decrypted value of a secret,
-    /// using either a private key provided
-    /// under a key file or a the global
-    /// key generated with `init`
-    Get {
-        secret_name: String,
-        /// File where a x25519 age key pair
-        /// is stored. Leave empty to use the
-        /// key pair for global
-        /// management of ver-related secrets
-        /// generated with `init`
+    /// Create a snapshot from specific files instead
+    /// of the full project
+    From {
+        /// Name of the snapshot
+        #[arg(long, short)]
+        name: String,
+        /// Description of the snapshot
         #[arg(long, short, default_value = None)]
-        key_file: Option<String>,
-    },
-    /// Add a new recipient identity
-    /// that can access the secrets
-    /// by providing their public
-    /// key
-    AddRecipient {
-        /// Name to associate with the recipient
-        /// identity
-        recipient_name: String,
-        /// Public key for the recipient
-        public_key: String,
-        /// File where a x25519 age key pair
-        /// is stored to decrypt existing secrets
-        /// and re-encrypt them with the new recipient.
-        /// Leave empty to use the
-        /// key pair for global
-        /// management of ver-related secrets
-        /// generated with `init`
-        #[arg(long, short, default_value = None)]
-        key_file: Option<String>,
-    },
-}
-
-/// Sync-related subcommands
-#[derive(Debug, Subcommand)]
-enum SyncCommands {
-    /// Sync with S3.
-    /// Leave all optional arguments
-    /// blank to infer the configuration
-    /// from the environment.
-    /// Prefix a value with `secrets/` to
-    /// load from local secrets (`.versecrets.json`)
-    S3 {
-        /// Name of the remote storage you are syncing with
-        remote_name: String,
-        /// Access key ID for the secret access key
-        #[arg(short, long, default_value = None)]
-        access_key_id: Option<String>,
-        /// Secret access key
-        #[arg(short, long, default_value = None)]
-        secret_access_key: Option<String>,
-        /// Region for the S3 deployments
-        #[arg(short, long, default_value = None)]
-        region: Option<String>,
-        /// S3 Endpoint
-        #[arg(short, long, default_value = None)]
-        endpoint: Option<String>,
-        /// Name of the bucket where
-        /// this repository should be stored.
-        /// Assumes one bucket per repository.
-        #[arg(short, long)]
-        bucket: String,
-        /// File where a x25519 age key pair
-        /// is stored. Leave empty to generate
-        /// a new key pair for global
-        /// management of ver-related secrets.
-        #[arg(long, short, default_value = None)]
-        key_file: Option<String>,
-    },
-    /// Sync with Google Cloud Storage.
-    /// Leave all optional arguments
-    /// blank to infer the configuration
-    /// from the environment.
-    /// Prefix a value with `secrets/` to
-    /// load from local secrets (`.versecrets.json`)
-    GCS {
-        /// Name of the remote storage you are syncing with
-        remote_name: String,
-        /// Path to the service account credentials file
-        #[arg(short, long)]
-        service_account_credentials_path: String,
-        /// Name of the bucket where
-        /// this repository should be stored.
-        /// Assumes one bucket per repository
-        #[arg(short, long)]
-        bucket: String,
-    },
-    /// Sync with Azure Blob Storage.
-    /// Leave all optional arguments
-    /// blank to infer the configuration
-    /// from the environment.
-    /// Prefix a value with `secrets/` to
-    /// load from local secrets (`.versecrets.json`)
-    Azure {
-        /// Name of the remote storage you are syncing with
-        remote_name: String,
-        /// Account connected to Azure Blob Storage
-        #[arg(long, default_value = None)]
-        account_name: Option<String>,
-        /// Secret key associated with the account
-        #[arg(long, default_value = None)]
-        account_key: Option<String>,
-        /// Azure Blob Storage endpoint
-        #[arg(short, long, default_value = None)]
-        endpoint: Option<String>,
-        /// Name of the container where
-        /// this repository should be stored.
-        /// Assumes one container per repository
-        #[arg(short, long)]
-        container: String,
-        /// File where a x25519 age key pair
-        /// is stored. Leave empty to generate
-        /// a new key pair for global
-        /// management of ver-related secrets.
-        #[arg(long, short, default_value = None)]
-        key_file: Option<String>,
-    },
-}
-
-/// Sync-related subcommands
-#[derive(Debug, Subcommand)]
-enum CloneCommands {
-    /// Clone from S3.
-    /// Leave all optional arguments
-    /// blank to infer the configuration
-    /// from the environment.
-    /// Prefix a value with `secrets/` to
-    /// load from local secrets (`.versecrets.json`)
-    S3 {
-        /// Name of the remote storage you are cloning from
-        remote_name: String,
-        /// Destination folder you are cloning to.
-        /// It gets created if it doesn't exist.
-        dest: String,
-        /// Access key ID for the secret access key
-        #[arg(short, long, default_value = None)]
-        access_key_id: Option<String>,
-        /// Secret access key
-        #[arg(short, long, default_value = None)]
-        secret_access_key: Option<String>,
-        /// Region for the S3 deployments
-        #[arg(short, long, default_value = None)]
-        region: Option<String>,
-        /// S3 Endpoint
-        #[arg(short, long, default_value = None)]
-        endpoint: Option<String>,
-        /// Name of the bucket where
-        /// this repository is stored.
-        /// Assumes one bucket per repository.
-        #[arg(short, long)]
-        bucket: String,
-        /// File where a x25519 age key pair
-        /// is stored. Leave empty to generate
-        /// a new key pair for global
-        /// management of ver-related secrets.
-        #[arg(long, short, default_value = None)]
-        key_file: Option<String>,
-    },
-    /// Clone from Google Cloud Storage.
-    /// Leave all optional arguments
-    /// blank to infer the configuration
-    /// from the environment.
-    /// Prefix a value with `secrets/` to
-    /// load from local secrets (`.versecrets.json`)
-    GCS {
-        /// Name of the remote storage you are cloning from
-        remote_name: String,
-        /// Destination folder you are cloning to.
-        /// It gets created if it doesn't exist.
-        dest: String,
-        /// Path to the service account credentials file
-        #[arg(short, long)]
-        service_account_credentials_path: String,
-        /// Name of the bucket where
-        /// this repository is stored.
-        /// Assumes one bucket per repository
-        #[arg(short, long)]
-        bucket: String,
-    },
-    /// Clone from Azure Blob Storage.
-    /// Leave all optional arguments
-    /// blank to infer the configuration
-    /// from the environment.
-    /// Prefix a value with `secrets/` to
-    /// load from local secrets (`.versecrets.json`)
-    Azure {
-        /// Name of the remote storage you are cloning from
-        remote_name: String,
-        /// Destination folder you are cloning to.
-        /// It gets created if it doesn't exist.
-        dest: String,
-        /// Account connected to Azure Blob Storage
-        #[arg(long, default_value = None)]
-        account_name: Option<String>,
-        /// Secret key associated with the account
-        #[arg(long, default_value = None)]
-        account_key: Option<String>,
-        /// Azure Blob Storage endpoint
-        #[arg(short, long, default_value = None)]
-        endpoint: Option<String>,
-        /// Name of the container where
-        /// this repository is stored.
-        /// Assumes one container per repository
-        #[arg(short, long)]
-        container: String,
-        /// File where a x25519 age key pair
-        /// is stored. Leave empty to generate
-        /// a new key pair for global
-        /// management of ver-related secrets.
-        #[arg(long, short, default_value = None)]
-        key_file: Option<String>,
+        description: Option<String>,
+        /// File to be added to the snapshot.
+        /// Can be used multiple times
+        #[arg(long, short)]
+        file: Vec<String>,
     },
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Initialize a ver repository
-    Init {
-        /// Directory to initialize
-        /// as a ver repository.
-        /// Defaults to the current directory
-        directory: Option<String>,
+    /// Context-related operations
+    Ctx {
+        #[command(subcommand)]
+        cmd: ContextCommands,
     },
-
-    /// Create a snapshot of the current state
-    /// of the repository
+    /// Snapshot-related operations
     Snap {
-        /// Name of the snapshot
-        name: String,
-        /// Snapshot description
-        #[arg(long, short, default_value = None)]
-        description: Option<String>,
+        #[command(subcommand)]
+        cmd: SnapCommands,
     },
-
-    /// Revert to the state of the repository
-    /// at a specific snapshot ID
-    Goto {
-        /// ID (or name) of the snapshot to revert to
-        snapshot_id: String,
-        /// Path to the files and folders
-        /// you want to revert to `snapshot_id`.
-        /// Reverts all files if not provided.
-        paths: Option<Vec<String>>,
-    },
-
-    /// Show the snapshot history
-    /// up until now
+    /// Display the snapshots history associated with the current
+    /// context
     Log {
-        /// Show only the last N snapshots
-        #[arg(long)]
-        head: Option<usize>,
+        /// Maximum number of log entries to display
+        #[arg(long, short, default_value = None)]
+        limit: Option<usize>,
+        /// Whether to tolerate errors (and thus an incomplete
+        /// history) when reading the history
+        #[arg(long, default_value_t = false)]
+        incomplete_ok: bool,
     },
-
-    /// Create a copy
-    /// of the current ver repository
-    /// from a specific snapshot
-    Cp {
+    /// Revert the whole project or some specified paths
+    /// to a previous snapshot
+    Goto {
         /// Snapshot ID or name
-        snapshot_id: String,
-        /// Destination where to copy
-        /// the repository. Will be
-        /// created if it does not
-        /// already exists
-        destination: String,
+        snapshot_id_or_name: String,
+        /// Relative path to a specific file to restore.
+        /// Can be used multiple times.
+        #[arg(long, short)]
+        path: Vec<String>,
+        /// Do not delete files
+        /// if they are not in
+        /// the target snapshot (only
+        /// applicable if the target
+        /// snapshot was a full snapshot)
+        #[arg(long, short, default_value_t = false)]
+        no_delete: bool,
     },
-
-    /// Merge-related sub-commands
+    /// Show the content of a file, optionally
+    /// specifing the snapshot to read the
+    /// file from
+    Show {
+        /// Relative path of the file
+        /// whose contents are to display
+        path: String,
+        /// ID or name of the snapshot
+        /// to read the file from.
+        /// Defaults to the current head.
+        #[arg(long, short, default_value = None)]
+        snapshot: Option<String>,
+        /// Offset (in bytes)
+        #[arg(long, short, default_value = None)]
+        offset: Option<usize>,
+        /// Maximum number of bytes to read
+        #[arg(long, short, default_value = None)]
+        limit: Option<usize>,
+    },
+    /// Show the diff on a file
+    /// between two snapshots
+    Diff {
+        /// Path of the file
+        /// to diff
+        path: String,
+        /// Head snapshot (defaults
+        /// to current head)
+        #[arg(long, default_value = None)]
+        head: Option<String>,
+        /// Base snapshot to diff
+        /// against
+        #[arg(long, short)]
+        base: String,
+    },
+    /// Sync a context with another.
+    /// Assumes both are associated
+    /// with the same project and
+    /// the target context is behind
+    /// in snapshot history
+    Sync {
+        #[arg(short, long, default_value = None)]
+        source: Option<String>,
+        #[arg(short, long)]
+        target: String,
+        #[arg(short, long, default_value_t = false)]
+        from_scratch: bool,
+    },
+    /// Merge two contexts
+    /// associated with the same
+    /// project.
+    /// Assumes the snapshot
+    /// history of the contexts
+    /// diverged: if not, use `sync`.
     Merge {
         #[command(subcommand)]
         merge_cmd: MergeCommands,
     },
-
-    /// Show the content of a file,
-    /// providing its relative path
-    /// and (optionally) the snapshot
-    /// ID or name
-    Show {
-        /// Path to the file
-        /// whose content you
-        /// want to show
-        path: String,
-        /// ID or name of the
-        /// snapshot that
-        /// holds the content
-        /// of the file
-        #[arg(long, short, default_value = None)]
-        snapshot_id: Option<String>,
-        /// Offset (in bytes) for the file's content
-        #[arg(long, short, default_value = None)]
-        offset: Option<usize>,
-        /// Maximum number of bytes to show,
-        /// starting from the offset
-        #[arg(long, short, default_value = None)]
-        limit: Option<usize>,
-    },
-
-    /// Diff a file between two snapshots
-    Diff {
-        /// Path to the file to diff
-        path: String,
-        /// Snapshot ID or name to diff from.
-        /// Defaults to the current HEAD snapshot
-        #[arg(long, short, default_value = None)]
-        from: Option<String>,
-        /// Snapshot ID or name to diff against
-        #[arg(long, short)]
-        against: String,
-    },
-
-    /// Subcommands for secrets management
-    Secrets {
-        #[command(subcommand)]
-        secret_cmd: SecretsCommands,
-    },
-
-    /// Sync the local repository
-    /// to a remote object storage (S3, GCS, Azure)
-    Sync {
-        #[command(subcommand)]
-        sync_cmd: SyncCommands,
-    },
-
-    /// Clone a repository
-    /// from a remote object storage (S3, GCS, Azure)
-    Clone {
-        #[command(subcommand)]
-        clone_cmd: CloneCommands,
-    },
 }
 
-#[derive(Debug, Parser)]
+#[derive(Parser)]
 struct Args {
     #[command(subcommand)]
     cmd: Commands,
@@ -453,90 +270,172 @@ fn main() -> Result<(), VerError> {
     let args = Args::parse();
 
     match args.cmd {
-        Commands::Snap { name, description } => {
-            let stdout = io::stdout();
-            let mut handle = stdout.lock();
-            snap(&name, description.as_deref(), &mut handle)
+        Commands::Ctx { cmd: ctx_cmd } => match ctx_cmd {
+            ContextCommands::Delete { context_name } => {
+                let mut ctx = read_context()?;
+                ctx.delete(&context_name)?;
+                ctx.to_global_context()?;
+                println!("Deleted context {context_name}");
+                Ok(())
+            }
+            ContextCommands::Switch { context_name } => {
+                let mut ctx = read_context()?;
+                ctx.switch(&context_name)?;
+                ctx.to_global_context()?;
+                println!("Switched to {context_name}");
+                Ok(())
+            }
+            ContextCommands::Scaffold {
+                context_name,
+                fs,
+                kv,
+            } => {
+                let mut ctx = read_context()?;
+                ctx.scaffold(&context_name, fs, kv)?;
+                ctx.to_global_context()?;
+                println!("Scaffolded {context_name}");
+                Ok(())
+            }
+            ContextCommands::Show { json } => {
+                let ctx = read_context()?;
+                if !json {
+                    println!(
+                        "{}",
+                        ctx.current
+                            .unwrap_or("WARNING: no current context".to_string())
+                    );
+                } else {
+                    let opt = ctx.current_context();
+                    if opt.is_none() {
+                        println!("WARNING: no current context");
+                        return Ok(());
+                    }
+                    let (fs_des, kv_des) = opt.unwrap();
+                    let val = serde_json::json!({
+                        "fs": &serde_json::to_value(&fs_des)?,
+                        "kv": &serde_json::to_value(&kv_des)?,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&val)?,);
+                }
+
+                Ok(())
+            }
+            ContextCommands::List { json } => {
+                let ctx = read_context()?;
+                if !json {
+                    println!(
+                        "{}",
+                        ctx.fs
+                            .keys()
+                            .map(|s| Cow::Borrowed(s.as_str()))
+                            .collect::<Vec<Cow<str>>>()
+                            .join("\n")
+                    );
+                    return Ok(());
+                }
+                println!("{}", serde_json::to_string_pretty(&ctx)?);
+                Ok(())
+            }
+            ContextCommands::Init { global } => {
+                init(global)?;
+                if global {
+                    println!("Successfully initialized ver globally");
+                } else {
+                    println!("Successfully initialized ver for the current context");
+                }
+                Ok(())
+            }
+        },
+        Commands::Snap { cmd: cmd_snap } => match cmd_snap {
+            SnapCommands::Full { name, description } => {
+                let out = io::stdout();
+                let err = io::stderr();
+
+                let mut outlock = out.lock();
+                let mut errlock = err.lock();
+                full_snap(&name, description.as_deref(), &mut outlock, &mut errlock)
+            }
+            SnapCommands::Patch { identifier, file } => {
+                let out = io::stdout();
+                let err = io::stderr();
+
+                let mut outlock = out.lock();
+                let mut errlock = err.lock();
+
+                files_snap(&identifier, None, file, true, &mut outlock, &mut errlock)
+            }
+            SnapCommands::From {
+                name,
+                description,
+                file,
+            } => {
+                let out = io::stdout();
+                let err = io::stderr();
+
+                let mut outlock = out.lock();
+                let mut errlock = err.lock();
+
+                files_snap(
+                    &name,
+                    description.as_deref(),
+                    file,
+                    false,
+                    &mut outlock,
+                    &mut errlock,
+                )
+            }
+        },
+        Commands::Log {
+            limit,
+            incomplete_ok,
+        } => {
+            let pager = minus::Pager::new();
+            let mut stdout = PagerWriter::new(pager);
+            log(incomplete_ok, limit, &mut stdout)?;
+            minus::page_all(stdout.pager).map_err(|e| e.into())
         }
-        Commands::Init { directory } => {
-            let stdout = io::stdout();
-            let mut handle = stdout.lock();
-            initialize(directory.as_deref(), &mut handle)
-        }
-        Commands::Log { head } => {
-            let stdout = io::stdout();
-            let handle = stdout.lock();
-            log(head, handle)
-        }
-        Commands::Goto { snapshot_id, paths } => goto(&snapshot_id, paths),
-        Commands::Cp {
-            snapshot_id,
-            destination,
+        Commands::Goto {
+            snapshot_id_or_name,
+            path,
+            no_delete,
         } => {
             let stdout = io::stdout();
-            let mut handle = stdout.lock();
-            ver_copy(&snapshot_id, &destination, &mut handle)
+            let mut lock = stdout.lock();
+            let stderr = io::stderr();
+            let mut errlock = stderr.lock();
+            goto(
+                &snapshot_id_or_name,
+                path,
+                !no_delete,
+                &mut lock,
+                &mut errlock,
+            )
         }
         Commands::Show {
             path,
-            snapshot_id,
+            snapshot,
             offset,
             limit,
         } => {
-            let stderr = io::stderr();
-            let mut err_handle = stderr.lock();
-
-            #[cfg(not(feature = "minus"))]
-            {
-                let out = io::stdout();
-                let mut handle = out.lock();
-
-                show_file(
-                    &path,
-                    snapshot_id,
-                    offset,
-                    limit,
-                    &mut handle,
-                    &mut err_handle,
-                )
-            }
-            #[cfg(feature = "minus")]
-            {
-                let pager = minus::Pager::new();
-                let mut handle = commons::PagerWriter::new(pager);
-                show_file(
-                    &path,
-                    snapshot_id,
-                    offset,
-                    limit,
-                    &mut handle,
-                    &mut err_handle,
-                )?;
-                minus::page_all(handle.pager)?;
-                Ok(())
-            }
+            let pager = minus::Pager::new();
+            let mut stdout = PagerWriter::new(pager);
+            show_file(&path, snapshot, offset, limit, &mut stdout)?;
+            minus::page_all(stdout.pager).map_err(|e| e.into())
         }
-        Commands::Diff {
-            path,
-            from,
-            against,
+        Commands::Diff { path, head, base } => {
+            let pager = minus::Pager::new();
+            let mut stdout = PagerWriter::new(pager);
+            diff(&path, head, base, &mut stdout)?;
+            minus::page_all(stdout.pager).map_err(|e| e.into())
+        }
+        Commands::Sync {
+            source,
+            target,
+            from_scratch,
         } => {
-            let stderr = io::stderr();
-            let mut err_handle = stderr.lock();
-            #[cfg(not(feature = "minus"))]
-            {
-                let stdout = io::stdout();
-                let mut handle = stdout.lock();
-                diff_file(&path, from, against, &mut handle, &mut err_handle)
-            }
-            #[cfg(feature = "minus")]
-            {
-                let pager = minus::Pager::new();
-                let mut handle = commons::PagerWriter::new(pager);
-                diff_file(&path, from, against, &mut handle, &mut err_handle)?;
-                minus::page_all(handle.pager)?;
-                Ok(())
-            }
+            let stdout = io::stdout();
+            let mut lock = stdout.lock();
+            sync(source, target, from_scratch, &mut lock)
         }
         Commands::Merge { merge_cmd } => match merge_cmd {
             MergeCommands::Run {
@@ -545,308 +444,51 @@ fn main() -> Result<(), VerError> {
                 our_snapshot,
                 their_snapshot,
             } => {
-                let stderr = io::stderr();
-                let mut err_handle = stderr.lock();
-                #[cfg(not(feature = "minus"))]
+                let pager = minus::Pager::new();
+                let mut stderr = PagerWriter::new(pager);
                 {
                     let stdout = io::stdout();
-                    let mut handle = stdout.lock();
-                    merge_run::<io::StdoutLock<'_>, io::StderrLock<'_>>(
-                        from.into(),
+                    let mut lock = stdout.lock();
+                    merge_run(
+                        from,
                         &name,
                         our_snapshot,
                         their_snapshot,
-                        &mut handle,
-                        &mut err_handle,
-                    )
-                }
-                #[cfg(feature = "minus")]
-                {
-                    let pager = minus::Pager::new();
-                    let mut handle = commons::PagerWriter::new(pager);
-                    merge_run::<commons::PagerWriter, io::StderrLock<'_>>(
-                        from.into(),
-                        &name,
-                        our_snapshot,
-                        their_snapshot,
-                        &mut handle,
-                        &mut err_handle,
+                        &mut lock,
+                        &mut stderr,
                     )?;
-                    minus::page_all(handle.pager)?;
-                    Ok(())
+                } // lock released here
+                if stderr.has_writes {
+                    minus::page_all(stderr.pager)?;
                 }
+                Ok(())
             }
             MergeCommands::Pick { name, our, their } => {
                 let stderr = io::stderr();
-                let mut err_handle = stderr.lock();
-
-                #[cfg(not(feature = "minus"))]
-                {
-                    let stdout = io::stdout();
-                    let mut handle = stdout.lock();
-
-                    merge_pick(
-                        &name,
-                        our.iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<&str>>()
-                            .as_slice(),
-                        their
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<&str>>()
-                            .as_slice(),
-                        &mut handle,
-                        &mut err_handle,
-                    )
-                }
-                #[cfg(feature = "minus")]
-                {
-                    let pager = minus::Pager::new();
-                    let mut handle = commons::PagerWriter::new(pager);
-
-                    merge_pick(
-                        &name,
-                        our.iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<&str>>()
-                            .as_slice(),
-                        their
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<&str>>()
-                            .as_slice(),
-                        &mut handle,
-                        &mut err_handle,
-                    )?;
-                    minus::page_all(handle.pager)?;
-                    Ok(())
-                }
+                let mut errlock = stderr.lock();
+                let stdout = io::stdout();
+                let mut lock = stdout.lock();
+                merge_pick(
+                    &name,
+                    our.iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<&str>>()
+                        .as_slice(),
+                    their
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<&str>>()
+                        .as_slice(),
+                    &mut lock,
+                    &mut errlock,
+                )
             }
             MergeCommands::End { name } => {
                 let stderr = io::stderr();
-                let mut err_handle = stderr.lock();
-
-                #[cfg(not(feature = "minus"))]
-                {
-                    let stdout = io::stdout();
-                    let mut handle = stdout.lock();
-                    merge_end(&name, &mut handle, &mut err_handle)
-                }
-                #[cfg(feature = "minus")]
-                {
-                    let pager = minus::Pager::new();
-                    let mut handle = commons::PagerWriter::new(pager);
-                    merge_end(&name, &mut handle, &mut err_handle)?;
-                    minus::page_all(handle.pager)?;
-                    Ok(())
-                }
-            }
-        },
-        Commands::Secrets { secret_cmd } => match secret_cmd {
-            SecretsCommands::AddRecipient {
-                recipient_name,
-                public_key,
-                key_file,
-            } => {
+                let mut errlock = stderr.lock();
                 let stdout = io::stdout();
-                let mut handle = stdout.lock();
-                add_recipient(recipient_name, public_key, key_file.as_deref(), &mut handle)
-            }
-            SecretsCommands::Get {
-                secret_name,
-                key_file,
-            } => {
-                let stdout = io::stdout();
-                let mut handle = stdout.lock();
-                let _ = get_secret(&secret_name, key_file.as_deref(), true, &mut handle)?;
-                Ok(())
-            }
-            SecretsCommands::Init {
-                recipient_name,
-                key_file,
-            } => {
-                let stdout = io::stdout();
-                let mut handle = stdout.lock();
-                init_secrets(key_file.as_deref(), recipient_name, &mut handle)
-            }
-            SecretsCommands::Set {
-                secret_name,
-                secret_value,
-            } => {
-                let stdout = io::stdout();
-                let mut handle = stdout.lock();
-                set_secret(&secret_name, &secret_value, &mut handle)
-            }
-        },
-        Commands::Sync { sync_cmd } => match sync_cmd {
-            SyncCommands::S3 {
-                remote_name,
-                access_key_id,
-                secret_access_key,
-                region,
-                endpoint,
-                bucket,
-                key_file,
-            } => {
-                let key_id = unwrap_maybe_secret(access_key_id.as_deref(), key_file.as_deref())?;
-                let secret_key =
-                    unwrap_maybe_secret(secret_access_key.as_deref(), key_file.as_deref())?;
-                let reg = unwrap_maybe_secret(region.as_deref(), key_file.as_deref())?;
-                let end = unwrap_maybe_secret(endpoint.as_deref(), key_file.as_deref())?;
-                let buck = unwrap_maybe_secret(Some(&bucket), key_file.as_deref())?;
-                let input = GetObjectStoreInput::S3 {
-                    access_key_id: key_id,
-                    secret_access_key: secret_key,
-                    region: reg,
-                    endpoint: end,
-                    bucket: buck.unwrap(),
-                };
-
-                let out = io::stdout();
-                let mut handle = out.lock();
-                let stderr = io::stderr();
-                let mut errhandle = stderr.lock();
-
-                sync_with_remote_storage(remote_name, input, &mut handle, &mut errhandle)?;
-
-                Ok(())
-            }
-            SyncCommands::Azure {
-                remote_name,
-                account_name,
-                account_key,
-                endpoint,
-                container,
-                key_file,
-            } => {
-                let account_n = unwrap_maybe_secret(account_name.as_deref(), key_file.as_deref())?;
-                let account_k = unwrap_maybe_secret(account_key.as_deref(), key_file.as_deref())?;
-                let end = unwrap_maybe_secret(endpoint.as_deref(), key_file.as_deref())?;
-                let cont = unwrap_maybe_secret(Some(&container), key_file.as_deref())?;
-                let input = GetObjectStoreInput::Azure {
-                    account_key: account_k,
-                    account_name: account_n,
-                    endpoint: end,
-                    container_name: cont.unwrap(),
-                };
-
-                let out = io::stdout();
-                let mut handle = out.lock();
-
-                let stderr = io::stderr();
-                let mut errhandle = stderr.lock();
-
-                sync_with_remote_storage(remote_name, input, &mut handle, &mut errhandle)?;
-
-                Ok(())
-            }
-            SyncCommands::GCS {
-                remote_name,
-                service_account_credentials_path,
-                bucket,
-            } => {
-                let input = GetObjectStoreInput::Gcs {
-                    service_account_credentials_path,
-                    bucket,
-                };
-
-                let out = io::stdout();
-                let mut handle = out.lock();
-
-                let stderr = io::stderr();
-                let mut errhandle = stderr.lock();
-
-                sync_with_remote_storage(remote_name, input, &mut handle, &mut errhandle)?;
-
-                Ok(())
-            }
-        },
-        Commands::Clone { clone_cmd } => match clone_cmd {
-            CloneCommands::S3 {
-                remote_name,
-                dest,
-                access_key_id,
-                secret_access_key,
-                region,
-                endpoint,
-                bucket,
-                key_file,
-            } => {
-                let key_id = unwrap_maybe_secret(access_key_id.as_deref(), key_file.as_deref())?;
-                let secret_key =
-                    unwrap_maybe_secret(secret_access_key.as_deref(), key_file.as_deref())?;
-                let reg = unwrap_maybe_secret(region.as_deref(), key_file.as_deref())?;
-                let end = unwrap_maybe_secret(endpoint.as_deref(), key_file.as_deref())?;
-                let buck = unwrap_maybe_secret(Some(&bucket), key_file.as_deref())?;
-                let input = GetObjectStoreInput::S3 {
-                    access_key_id: key_id,
-                    secret_access_key: secret_key,
-                    region: reg,
-                    endpoint: end,
-                    bucket: buck.unwrap(),
-                };
-
-                let out = io::stdout();
-                let mut handle = out.lock();
-
-                let stderr = io::stderr();
-                let mut errhandle = stderr.lock();
-
-                clone_from_remote(remote_name, dest, input, &mut handle, &mut errhandle)?;
-
-                Ok(())
-            }
-            CloneCommands::Azure {
-                remote_name,
-                dest,
-                account_name,
-                account_key,
-                endpoint,
-                container,
-                key_file,
-            } => {
-                let account_n = unwrap_maybe_secret(account_name.as_deref(), key_file.as_deref())?;
-                let account_k = unwrap_maybe_secret(account_key.as_deref(), key_file.as_deref())?;
-                let end = unwrap_maybe_secret(endpoint.as_deref(), key_file.as_deref())?;
-                let cont = unwrap_maybe_secret(Some(&container), key_file.as_deref())?;
-                let input = GetObjectStoreInput::Azure {
-                    account_key: account_k,
-                    account_name: account_n,
-                    endpoint: end,
-                    container_name: cont.unwrap(),
-                };
-
-                let out = io::stdout();
-                let mut handle = out.lock();
-
-                let stderr = io::stderr();
-                let mut errhandle = stderr.lock();
-
-                clone_from_remote(remote_name, dest, input, &mut handle, &mut errhandle)?;
-
-                Ok(())
-            }
-            CloneCommands::GCS {
-                remote_name,
-                dest,
-                service_account_credentials_path,
-                bucket,
-            } => {
-                let input = GetObjectStoreInput::Gcs {
-                    service_account_credentials_path,
-                    bucket,
-                };
-
-                let out = io::stdout();
-                let mut handle = out.lock();
-
-                let stderr = io::stderr();
-                let mut errhandle = stderr.lock();
-
-                clone_from_remote(remote_name, dest, input, &mut handle, &mut errhandle)?;
-
-                Ok(())
+                let mut lock = stdout.lock();
+                merge_end(&name, &mut lock, &mut errlock)
             }
         },
     }

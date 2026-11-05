@@ -1,197 +1,78 @@
-use std::{
-    env, io,
-    panic::AssertUnwindSafe,
-    str::FromStr,
-    sync::{Arc, mpsc},
-};
+use std::{io, sync::Arc};
 
-use futures_util::FutureExt;
-use redb::{Database, ReadableDatabase};
+use blobsdb::BlobsDBWithFs;
 
 use crate::{
-    commons::{get_head, resolve_ver_dir_path, to_text},
+    commons::{current_fs_kv, get_head, load_snapshot, resolve_snapshot_id, rt},
     errors::VerError,
-    files::{SNAPSHOT_TABLE, Snapshot, panic_msg, rt},
-    init::{REDB_PATH, init_blobs_db},
-    named::get_snapshot_by_name,
+    show::to_text,
 };
 
-fn resolve_snapshot(
-    redb: &Database,
-    table: &redb::ReadOnlyTable<[u8; 32], &[u8]>,
-    snapshot_id: &str,
-) -> Result<Snapshot, VerError> {
-    let maybe_hash = blake3::Hash::from_str(snapshot_id);
-
-    let hash = match maybe_hash {
-        Ok(h) => h.as_bytes().to_owned(),
-        Err(_) => get_snapshot_by_name(redb, snapshot_id)?,
-    };
-
-    let content = table.get(hash)?;
-
-    if let Some(accessmut) = content {
-        Ok(postcard::from_bytes(accessmut.value())?)
-    } else {
-        Err(format!("Could not find snapshot associated with {}", snapshot_id).into())
-    }
-}
-
-async fn get_file_content(
-    resolved: &std::path::Path,
-    snap: &Snapshot,
+pub fn diff<O: io::Write>(
     path: &str,
-) -> Result<Option<Vec<u8>>, VerError> {
-    let path_hash = snap.repository_state.get(path);
-
-    if let Some(ha) = path_hash {
-        let blobdb = init_blobs_db(resolved)?;
-        let opt = blobdb.get(Arc::new(ha.to_owned())).await?;
-        return Ok(Some(opt));
-    }
-
-    Ok(None)
-}
-
-pub fn diff_file<O: io::Write, E: io::Write>(
-    path: &str,
-    from: Option<String>,
-    against: String,
-    std_out: &mut O,
-    std_err: &mut E,
+    head_snapshot: Option<String>,
+    base_snapshot: String,
+    stdout: &mut O,
 ) -> Result<(), VerError> {
-    let current_dir = env::current_dir()?;
-    let resolved = resolve_ver_dir_path(current_dir)?;
-    let redb = Database::open(resolved.join(REDB_PATH))?;
-    let rx = redb.begin_read()?;
-    let table = rx.open_table(SNAPSHOT_TABLE)?;
-
-    // Resolve the "from" snapshot: use provided value or fall back to HEAD
-    let snap_from: Snapshot = if let Some(ref sid) = from {
-        resolve_snapshot(&redb, &table, sid)?
+    let (fs, kv) = current_fs_kv()?;
+    let head_snapshot_id = if let Some(ref h) = head_snapshot {
+        resolve_snapshot_id(h, &kv)?
     } else {
-        let cur = get_head(&resolved)?;
-
-        if cur.is_none() {
-            return Err("No snapshot saved yet, nothing to diff from".into());
-        }
-
-        let l = table.get(cur.unwrap())?;
-
-        if let Some(content) = l {
-            postcard::from_bytes(content.value())?
-        } else {
-            return Err("Head snapshot could not be found".into());
-        }
+        get_head(&fs)?.expect("The current project has no head")
     };
+    let base_snapshot_id = resolve_snapshot_id(&base_snapshot, &kv)?;
+    let base_snap = load_snapshot(&kv, base_snapshot_id)?;
+    let head_snap = load_snapshot(&kv, head_snapshot_id)?;
 
-    let snap_against: Snapshot = resolve_snapshot(&redb, &table, &against)?;
+    let base_chunks = base_snap.repository_state.get(path);
+    let head_chunks = head_snap.repository_state.get(path);
 
-    let (tx, rx) = mpsc::channel::<(bool, Result<Option<Vec<u8>>, VerError>)>();
+    let db = BlobsDBWithFs::new(fs.clone());
 
-    let tx1 = tx.clone();
-    let resolved1 = resolved.clone();
-    let path1 = path.to_owned();
+    match (base_chunks, head_chunks) {
+        (Some(bc), Some(hc)) => {
+            let (base_content, head_content) = rt().block_on(async {
+                let bcont = db.get(Arc::new(bc.clone())).await?;
+                let hcont = db.get(Arc::new(hc.clone())).await?;
+                Ok::<(Vec<u8>, Vec<u8>), String>((bcont, hcont))
+            })?;
+            let (base_text, head_text) = (to_text(&base_content), to_text(&head_content));
+            match (base_text, head_text) {
+                (Some(bt), Some(ht)) => {
+                    let head_label = head_snapshot.as_deref().unwrap_or("HEAD");
+                    let patch = diffy::DiffOptions::new()
+                        .set_original_filename(format!("{} ({})", path, base_snapshot))
+                        .set_modified_filename(format!("{} ({})", path, head_label))
+                        .create_patch(bt, ht);
 
-    rt().spawn(async move {
-        let res =
-            match AssertUnwindSafe(
-                async move { get_file_content(&resolved1, &snap_from, &path1).await },
-            )
-            .catch_unwind()
-            .await
-            {
-                Ok(r) => r,
-                Err(payload) => Err(VerError {
-                    message: panic_msg(payload),
-                }),
-            };
-        tx1.send((true, res))
-    });
-
-    let tx2 = tx.clone();
-    let resolved2 = resolved.clone();
-    let path2 = path.to_owned();
-
-    rt().spawn(async move {
-        let res = match AssertUnwindSafe(async move {
-            get_file_content(&resolved2, &snap_against, &path2).await
-        })
-        .catch_unwind()
-        .await
-        {
-            Ok(r) => r,
-            Err(payload) => Err(VerError {
-                message: panic_msg(payload),
-            }),
-        };
-        tx2.send((false, res))
-    });
-
-    drop(tx);
-
-    let mut content_from = None;
-    let mut content_against = None;
-
-    for (is_from, r) in rx {
-        if r.is_err() {
-            return Err(r.unwrap_err());
-        }
-        if is_from {
-            content_from = r.unwrap();
-        } else {
-            content_against = r.unwrap();
-        }
-    }
-
-    match (content_from, content_against) {
-        (None, None) => {
-            return Err(format!("Could not find {} in either snapshot", path).into());
-        }
-        (None, Some(_)) => {
-            writeln!(
-                std_err,
-                "File {} does not exist in the \"from\" snapshot, only in \"against\"",
-                path
-            )?;
-            return Ok(());
+                    let formatter = diffy::PatchFormatter::new();
+                    write!(stdout, "{}", formatter.fmt_patch(&patch))?;
+                }
+                (Some(_), None) => {}
+                (None, Some(_)) => {}
+                (None, None) => {}
+            }
         }
         (Some(_), None) => {
             writeln!(
-                std_err,
-                "File {} does not exist in the \"against\" snapshot, only in \"from\"",
+                stdout,
+                "Path {} does not exist in head snapshot, but exists in base",
                 path
             )?;
-            return Ok(());
         }
-        (Some(ref cf), Some(ref ca)) => {
-            if cf == ca {
-                writeln!(std_out, "Files are identical")?;
-                return Ok(());
-            }
-
-            let text_from = to_text(cf);
-            let text_against = to_text(ca);
-
-            match (text_from, text_against) {
-                (Some(tf), Some(ta)) => {
-                    let from_label = from.as_deref().unwrap_or("HEAD");
-                    let patch = diffy::DiffOptions::new()
-                        .set_original_filename(format!("{} ({})", path, from_label))
-                        .set_modified_filename(format!("{} ({})", path, against))
-                        .create_patch(tf, ta);
-
-                    let formatter = diffy::PatchFormatter::new();
-                    write!(std_out, "{}", formatter.fmt_patch(&patch))?;
-                }
-                _ => {
-                    writeln!(
-                        std_err,
-                        "Cannot diff {}: one or both versions do not appear to be text-based",
-                        path
-                    )?;
-                }
-            }
+        (None, Some(_)) => {
+            writeln!(
+                stdout,
+                "Path {} does not exist in base snapshot, but exists in head",
+                path
+            )?;
+        }
+        (None, None) => {
+            writeln!(
+                stdout,
+                "Path {} does not exist in the specified snapshots",
+                path
+            )?;
         }
     }
 

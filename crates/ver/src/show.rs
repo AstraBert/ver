@@ -1,13 +1,10 @@
-use std::{env, io, str::FromStr, sync::Arc};
+use std::{io, sync::Arc};
 
-use redb::{Database, ReadableDatabase};
+use blobsdb::BlobsDBWithFs;
 
 use crate::{
-    commons::{get_head, resolve_ver_dir_path, to_text},
+    commons::{current_fs_kv, get_head, load_snapshot, resolve_snapshot_id, rt},
     errors::VerError,
-    files::{SNAPSHOT_TABLE, Snapshot, rt},
-    init::{REDB_PATH, init_blobs_db},
-    named::get_snapshot_by_name,
 };
 
 #[cfg(not(feature = "pretty-hex"))]
@@ -31,75 +28,46 @@ fn hexdump(bytes: &[u8], mut out: impl io::Write) -> Result<(), VerError> {
     Ok(())
 }
 
-pub fn show_file<O: io::Write, E: io::Write>(
+pub fn to_text(content: &[u8]) -> Option<&str> {
+    let buf = if content.len() > 8192 {
+        &content[..8192]
+    } else {
+        content
+    };
+    if buf.contains(&0) {
+        None
+    } else {
+        std::str::from_utf8(content).ok()
+    }
+}
+
+pub fn show_file<O: io::Write>(
     path: &str,
     snapshot_id: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
-    out: &mut O,
-    std_err: &mut E,
+    stdout: &mut O,
 ) -> Result<(), VerError> {
-    let current_dir = env::current_dir()?;
-    let resolved = resolve_ver_dir_path(current_dir)?;
-    let redb = Database::open(resolved.join(REDB_PATH))?;
-    let rx = redb.begin_read()?;
-    let table = rx.open_table(SNAPSHOT_TABLE)?;
-
-    let snap: Snapshot = if let Some(sid) = snapshot_id {
-        let maybe_hash = blake3::Hash::from_str(&sid);
-
-        let hash = match maybe_hash {
-            Ok(h) => h.as_bytes().to_owned(),
-            Err(_) => get_snapshot_by_name(&redb, &sid)?,
-        };
-
-        let content = table.get(hash)?;
-
-        if let Some(accessmut) = content {
-            postcard::from_bytes(accessmut.value())?
+    let (fs, kv) = current_fs_kv()?;
+    let snap_id = if let Some(id) = snapshot_id {
+        resolve_snapshot_id(&id, &kv)?
+    } else {
+        get_head(&fs)?.expect("The current project has no head")
+    };
+    let snap = load_snapshot(&kv, snap_id)?;
+    let db = BlobsDBWithFs::new(fs.clone());
+    if let Some(chunks) = snap.repository_state.get(path) {
+        let chunks = Arc::new(chunks.clone());
+        let content = rt().block_on(async { db.get(chunks).await })?;
+        let content = &content[offset.unwrap_or(0)..limit.unwrap_or(content.len())];
+        if let Some(s) = to_text(content) {
+            writeln!(stdout, "{}", s)?;
         } else {
-            return Err(format!("Could not find snapshot associated with {}", sid).into());
+            hexdump(content, stdout)?;
         }
     } else {
-        let cur = get_head(&resolved)?;
-
-        if cur.is_none() {
-            return Err("No snapshot saved yet, nothing to show".into());
-        }
-
-        let l = table.get(cur.unwrap())?;
-
-        if let Some(content) = l {
-            postcard::from_bytes(content.value())?
-        } else {
-            return Err("Head snapshot could not be found".into());
-        }
-    };
-
-    let path_hash = snap.repository_state.get(path);
-
-    if let Some(ha) = path_hash {
-        let blobdb = init_blobs_db(&resolved)?;
-        let opt = rt().block_on(async { blobdb.get(Arc::new(ha.to_owned())).await });
-        if let Ok(content) = opt {
-            let offset = offset.unwrap_or_default();
-            let limit = content.len().min(limit.unwrap_or(content.len()));
-            let new_cont = &content[offset..limit];
-            if let Some(text) = to_text(new_cont) {
-                writeln!(out, "{}", text)?;
-            } else {
-                writeln!(
-                    std_err,
-                    "WARNING: the requested file does not appear to be text-based, it will be hex-dumped"
-                )?;
-                hexdump(new_cont, out)?;
-            }
-        } else {
-            return Err(opt.unwrap_err().into());
-        }
-
-        return Ok(());
+        return Err(format!("Could not find {path} in the requested snapshot").into());
     }
 
-    Err(format!("Could not find {} in the requested snapshot", path).into())
+    Ok(())
 }

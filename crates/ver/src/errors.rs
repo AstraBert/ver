@@ -1,11 +1,6 @@
-use age::{DecryptError, EncryptError, IdentityFileConvertError};
-use blake3::HexError;
-use ignore::Error as IgnoreError;
-use postcard::Error as PostcardError;
-use redb::{
-    CommitError, DatabaseError, Error as RedbError, StorageError, TableError, TransactionError,
-};
-use std::{error::Error, fmt::Display, io, string::FromUtf8Error};
+use std::{array::TryFromSliceError, error::Error, fmt::Display, io, string::FromUtf8Error};
+use ver_fs::errors::FsError;
+use ver_kv::{RedisError, errors::KVError};
 
 /// Internal error that abstracts errors from other
 /// crates
@@ -22,21 +17,26 @@ impl Display for VerError {
 
 impl Error for VerError {}
 
-impl From<HexError> for VerError {
-    fn from(value: HexError) -> Self {
+impl From<minus::MinusError> for VerError {
+    fn from(value: minus::MinusError) -> Self {
         Self {
-            message: format!("Invalid snapshot ID: {}", value),
+            message: format!("Minus error: {value}"),
         }
     }
 }
 
-impl From<RedbError> for VerError {
-    fn from(value: RedbError) -> Self {
+impl From<TryFromSliceError> for VerError {
+    fn from(value: TryFromSliceError) -> Self {
         Self {
-            message: format!(
-                "An error occurred while creating the redb database: {}",
-                value
-            ),
+            message: format!("Error while converting slice to [u8; 32]: {value}"),
+        }
+    }
+}
+
+impl From<postcard::Error> for VerError {
+    fn from(value: postcard::Error) -> Self {
+        Self {
+            message: format!("Error while serializing/deserializing bytes with postcard: {value}"),
         }
     }
 }
@@ -55,55 +55,6 @@ impl From<String> for VerError {
     }
 }
 
-impl From<DatabaseError> for VerError {
-    fn from(value: DatabaseError) -> Self {
-        Self {
-            message: format!(
-                "An error occurred while opening the redb database: {}",
-                value
-            ),
-        }
-    }
-}
-
-impl From<TransactionError> for VerError {
-    fn from(value: TransactionError) -> Self {
-        Self {
-            message: format!("An error occurred with a redb transaction: {}", value),
-        }
-    }
-}
-
-impl From<TableError> for VerError {
-    fn from(value: TableError) -> Self {
-        Self {
-            message: format!("An error occurred while opening a redb table: {}", value),
-        }
-    }
-}
-
-impl From<StorageError> for VerError {
-    fn from(value: StorageError) -> Self {
-        Self {
-            message: format!(
-                "An error occurred while attempting to write to redb: {}",
-                value
-            ),
-        }
-    }
-}
-
-impl From<CommitError> for VerError {
-    fn from(value: CommitError) -> Self {
-        Self {
-            message: format!(
-                "An error occurred while committing a write to redb: {}",
-                value
-            ),
-        }
-    }
-}
-
 impl From<io::Error> for VerError {
     fn from(value: io::Error) -> Self {
         Self {
@@ -112,67 +63,10 @@ impl From<io::Error> for VerError {
     }
 }
 
-impl From<PostcardError> for VerError {
-    fn from(value: PostcardError) -> Self {
-        Self {
-            message: format!(
-                "Error while serializing or deserializing with postcard: {}",
-                value
-            ),
-        }
-    }
-}
-
-impl From<fs_extra::error::Error> for VerError {
-    fn from(value: fs_extra::error::Error) -> Self {
-        Self {
-            message: format!(
-                "Error while copying the .ver folder to the new destination: {}",
-                value
-            ),
-        }
-    }
-}
-
-impl From<IgnoreError> for VerError {
-    fn from(value: IgnoreError) -> Self {
-        Self {
-            message: format!("Error while walking the directory recursively: {}", value),
-        }
-    }
-}
-
 impl From<std::fmt::Error> for VerError {
     fn from(value: std::fmt::Error) -> Self {
         Self {
             message: format!("Formatting error: {}", value),
-        }
-    }
-}
-
-impl From<IdentityFileConvertError> for VerError {
-    fn from(value: IdentityFileConvertError) -> Self {
-        Self {
-            message: format!(
-                "Error while writing the recipients file from the provided key file: {}",
-                value
-            ),
-        }
-    }
-}
-
-impl From<EncryptError> for VerError {
-    fn from(value: EncryptError) -> Self {
-        Self {
-            message: format!("age encryption error: {}", value),
-        }
-    }
-}
-
-impl From<DecryptError> for VerError {
-    fn from(value: DecryptError) -> Self {
-        Self {
-            message: format!("age decryption error: {}", value),
         }
     }
 }
@@ -188,16 +82,58 @@ impl From<FromUtf8Error> for VerError {
 impl From<serde_json::Error> for VerError {
     fn from(value: serde_json::Error) -> Self {
         Self {
-            message: format!("Serialization/deserlization error: {}", value),
+            message: format!("JSON serialization/deserialization error: {}", value),
         }
     }
 }
 
-#[cfg(feature = "minus")]
-impl From<minus::MinusError> for VerError {
-    fn from(value: minus::MinusError) -> Self {
+impl From<toml::de::Error> for VerError {
+    fn from(value: toml::de::Error) -> Self {
         Self {
-            message: format!("Error while displaying the snapshot history: {}", value),
+            message: format!("TOML deserialization error: {}", value),
+        }
+    }
+}
+
+impl From<redb::DatabaseError> for VerError {
+    fn from(value: redb::DatabaseError) -> Self {
+        Self {
+            message: format!(
+                "An error occurred while opening the redb database: {}",
+                value
+            ),
+        }
+    }
+}
+
+impl From<toml::ser::Error> for VerError {
+    fn from(value: toml::ser::Error) -> Self {
+        Self {
+            message: format!("TOML serialization error: {}", value),
+        }
+    }
+}
+
+impl From<RedisError> for VerError {
+    fn from(value: RedisError) -> Self {
+        Self {
+            message: format!("Redis error: {}", value),
+        }
+    }
+}
+
+impl From<FsError> for VerError {
+    fn from(value: FsError) -> Self {
+        Self {
+            message: format!("FS error: {}", value),
+        }
+    }
+}
+
+impl From<KVError> for VerError {
+    fn from(value: KVError) -> Self {
+        Self {
+            message: format!("KV error: {}", value),
         }
     }
 }

@@ -1,0 +1,77 @@
+---
+title: CLI reference
+description: Every ver command and flag.
+sidebar:
+  order: 0
+---
+
+Every command operates on the **current context** unless it takes another context by name. Snapshot arguments accept a name or a BLAKE3 snapshot ID interchangeably.
+
+## `ver ctx`
+
+Context management. See the [contexts reference](/reference/contexts/) for the file format.
+
+| Command | Description |
+| --- | --- |
+| `ver ctx init [--global]` | With `--global`, create `~/.ver/`. Without, initialize the project of the current (or named) context: blob store dirs, history dir, redb file. |
+| `ver ctx scaffold <name> --fs <local\|s3\|gcs\|azure> --kv <embedded\|redis>` | Add an empty context to `contexts.toml` for you to fill in. |
+| `ver ctx switch <name>` | Make a context current. |
+| `ver ctx delete <name>` | Remove a context. Refuses to delete the current one. |
+| `ver ctx show [--json]` | Print the current context's name, or its full spec as JSON. |
+| `ver ctx list [--json]` | List all context names, or the whole file as JSON. |
+
+## `ver snap`
+
+| Command | Description |
+| --- | --- |
+| `ver snap full --name <name> [--description <text>]` | Snapshot every tracked file in the project. |
+| `ver snap from --name <name> [--description <text>] --file <path>...` | Snapshot only the given files (partial snapshot). |
+| `ver snap patch --identifier <name-or-id> --file <path>...` | Add or update files in an existing snapshot. |
+
+## `ver goto`
+
+```sh
+ver goto <name-or-id> [--path <path>...] [--no-delete]
+```
+
+Restore the project to a snapshot. With `--path`, restore only those files. For full snapshots, files missing from the snapshot are deleted unless `--no-delete` is passed.
+
+## `ver log`
+
+```sh
+ver log [--limit <n>] [--incomplete-ok]
+```
+
+Print snapshot history, newest first, in a pager. `--incomplete-ok` tolerates missing history entries with a warning instead of an error.
+
+## `ver show`
+
+```sh
+ver show <path> [--snapshot <name-or-id>] [--offset <n>] [--limit <n>]
+```
+
+Print a file's content at a snapshot (default: current head). Text prints as-is, binary is hex-dumped. `--offset`/`--limit` select a byte range.
+
+## `ver diff`
+
+```sh
+ver diff <path> --base <name-or-id> [--head <name-or-id>]
+```
+
+Unified diff of a file between `--base` and `--head` (default: current head).
+
+## `ver sync`
+
+```sh
+ver sync --target <context> [--source <context>] [--from-scratch]
+```
+
+Copy snapshots from the source (default: current context) to the target. `--from-scratch` bulk-copies everything into an empty target; otherwise only the snapshots the target is missing are transferred. Refuses when the histories have diverged; use `ver merge` then.
+
+## `ver merge`
+
+| Command | Description |
+| --- | --- |
+| `ver merge run <name> --from <context> [--our-snapshot <id>] [--their-snapshot <id>]` | Three-way merge the other context into the current one. Commits immediately when clean; otherwise stores a partial merge under `<name>`. |
+| `ver merge pick <name> [--our <path>...] [--their <path>...]` | Resolve conflicting paths by picking a side. |
+| `ver merge end <name>` | Finalize a fully-resolved merge: commit the two-parent snapshot and drop the partial merge state. |

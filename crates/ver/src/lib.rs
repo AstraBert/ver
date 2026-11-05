@@ -1,13 +1,11 @@
-pub mod clone;
 pub mod commons;
-pub mod cp;
+pub mod context;
 pub mod diff;
 pub mod errors;
-pub mod files;
+pub mod goto;
 pub mod init;
 pub mod log;
 pub mod merge;
-pub mod named;
-pub mod secrets;
 pub mod show;
+pub mod snap;
 pub mod sync;

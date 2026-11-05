@@ -1,57 +1,29 @@
-use std::io;
-use std::{env, fs};
+use std::io::Write;
 
-#[cfg(feature = "minus")]
-use minus::Pager;
-#[cfg(feature = "minus")]
-use std::fmt::Write;
+use crate::{
+    commons::{current_fs_kv, read_history},
+    errors::VerError,
+};
 
-use crate::commons::resolve_ver_dir_path;
-use crate::errors::VerError;
-use crate::init::SNAPSHOT_HISTORY_FILE;
-
-#[cfg(feature = "minus")]
-pub fn log(head: Option<usize>, mut _out: impl io::Write) -> Result<(), VerError> {
-    let current_dir = env::current_dir()?;
-    let resolved = resolve_ver_dir_path(current_dir)?;
-    let fl = resolved.join(SNAPSHOT_HISTORY_FILE);
-    let content = fs::read_to_string(fl)?;
-    let mut lines: Vec<&str> = content.lines().collect();
-    lines.reverse();
-
-    if let Some(h) = (head)
-        && h <= lines.len()
-    {
-        let _ = lines.split_off(h);
+pub fn log<O: Write>(
+    tolerate_incomplete: bool,
+    limit: Option<usize>,
+    stdout: &mut O,
+) -> Result<(), VerError> {
+    let (fs, _) = current_fs_kv()?;
+    let (mut logs, is_incomplete) = read_history(tolerate_incomplete, &fs)?;
+    if let Some(l) = limit {
+        logs.truncate(l);
     }
-
-    let mut output = Pager::new();
-
-    for l in lines {
-        writeln!(output, "{}", l)?;
+    for l in logs {
+        writeln!(stdout, "{}", l)?;
     }
-
-    minus::page_all(output)?;
-
-    Ok(())
-}
-
-#[cfg(not(feature = "minus"))]
-pub fn log(head: Option<usize>, mut out: impl io::Write) -> Result<(), VerError> {
-    let current_dir = env::current_dir()?;
-    let resolved = resolve_ver_dir_path(current_dir)?;
-    let fl = resolved.join(SNAPSHOT_HISTORY_FILE);
-    let content = fs::read_to_string(fl)?;
-    let mut lines: Vec<&str> = content.lines().collect();
-    lines.reverse();
-
-    if let Some(h) = (head)
-        && h <= lines.len()
-    {
-        let _ = lines.split_off(h);
+    if is_incomplete {
+        writeln!(
+            stdout,
+            "WARNING: some logs are missing from the reported history. If you want this to be an error, do not pass --incomplete-ok as a flag"
+        )?;
     }
-
-    writeln!(out, "{}", lines.join("\n"))?;
 
     Ok(())
 }
