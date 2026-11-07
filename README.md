@@ -10,11 +10,26 @@ Full documentation: https://ver-vcs.net
 
 ## Installation
 
+If you have cargo (recommended):
+
 ```sh
 cargo install ver-vcs
 ```
 
-Or build from source:
+If you're on Linux or Mac:
+
+```bash
+# latest
+curl -fsSL https://raw.githubusercontent.com/AstraBert/ver/main/install.sh | bash
+
+# pinned version, custom location
+curl -fsSL https://raw.githubusercontent.com/AstraBert/ver/main/install.sh \
+  | VERSION=v0.1.0 INSTALL_DIR=/usr/local/bin bash
+```
+
+If you're on Windows, you can download the latest executable from [here](https://github.com/AstraBert/ver/releases/latest).
+
+You can also build from source:
 
 ```sh
 git clone https://github.com/AstraBert/ver.git
