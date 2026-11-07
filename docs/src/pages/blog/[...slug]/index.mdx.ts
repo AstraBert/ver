@@ -1,3 +1,3 @@
-import { mdxRoute } from "@cloudflare/nimbus-docs/agent-endpoints";
+import { markdownSourceRoute } from "@cloudflare/nimbus-docs/agent-endpoints";
 
-export const { GET, getStaticPaths } = mdxRoute({ collection: "blog" });
+export const { GET, getStaticPaths } = markdownSourceRoute({ collection: "blog" });
