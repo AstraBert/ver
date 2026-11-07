@@ -20,7 +20,11 @@ const nimbusConfig = defineNimbusConfig({
   socialImageAlt: "ver documentation preview",
   // The home page leads the sidebar; every other page joins it automatically.
   sidebar: {
-    items: ["index", { autogenerate: { collection: "docs" } }],
+    items: [
+      "index",
+      { autogenerate: { collection: "docs" } },
+      { label: "Blog", autogenerate: { collection: "blog" } },
+    ],
   },
 });
 
