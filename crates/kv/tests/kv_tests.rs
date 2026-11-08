@@ -16,7 +16,10 @@ fn key(byte: u8) -> [u8; 32] {
 /// Build a RedisStore from REDIS_URI, or None if the var is unset (test skips).
 fn redis_store() -> Option<Arc<RedisStore>> {
     let uri = std::env::var("REDIS_URI").ok()?;
-    let store = RedisStore::new(uri).expect("REDIS_URI should be a valid connection string");
+    let ns = std::env::var("REDIS_NAMESPACE")
+        .ok()
+        .unwrap_or("test".to_string());
+    let store = RedisStore::new(uri, ns).expect("REDIS_URI should be a valid connection string");
     Some(Arc::new(store))
 }
 

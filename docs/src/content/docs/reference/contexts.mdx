@@ -84,6 +84,12 @@ A single-file embedded database. Only valid together with a **local** filesystem
 
 ### Redis
 
+<Aside type="note">
+    _Available as of version 0.2.1-alpha_
+
+    Redis is namespaced by context, so your can re-use the same server for multiple contexts.
+</Aside>
+
 ```toml
 [kv.<name>]
 uri = "redis://[:password@]host[:port]"
