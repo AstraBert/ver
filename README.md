@@ -13,7 +13,7 @@ Full documentation: https://ver-vcs.net
 If you have cargo (recommended):
 
 ```sh
-cargo install ver-vcs
+cargo install ver-vcs --version 0.2.0-alpha
 ```
 
 If you're on Linux or Mac:
