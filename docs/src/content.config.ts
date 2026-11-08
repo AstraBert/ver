@@ -14,5 +14,17 @@ export const collections = {
       },
     }),
   ),
+  blog: defineCollection(
+    docsCollection({
+      base: "blog",
+      schemaFields: {
+        // Blog posts have an author and publication date (optional for index pages)
+        author: z.string().optional(),
+        pubDate: z.coerce.date().optional(),
+        // Optional tags for categorization
+        tags: z.array(z.string()).optional(),
+      },
+    }),
+  ),
   partials: defineCollection(partialsCollection()),
 };

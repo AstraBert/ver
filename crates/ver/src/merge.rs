@@ -299,7 +299,7 @@ pub fn merge_run<O: io::Write, E: io::Write>(
 ) -> Result<(), VerError> {
     let ctx = read_context()?;
     let (fs_a, kv_a) = current_fs_kv()?;
-    let (fs_b, kv_b) = build_context(ctx.get_context(&other_context).ok(), &other_context)?;
+    let (fs_b, kv_b) = build_context(ctx.get_context(&other_context).ok(), Some(&other_context))?;
 
     let blobdb_a = Arc::new(BlobsDBWithFs::new(fs_a.clone()));
     let blobdb_b = Arc::new(BlobsDBWithFs::new(fs_b.clone()));

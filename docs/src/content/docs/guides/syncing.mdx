@@ -49,6 +49,12 @@ For each missing snapshot, sync copies:
 
 ## A typical setup
 
+<Aside type="note">
+    _Available as of version 0.2.1-alpha_
+
+    Redis is namespaced by context, so your can re-use the same server for multiple contexts.
+</Aside>
+
 ```toml title="~/.ver/contexts.toml"
 current = "laptop"
 
