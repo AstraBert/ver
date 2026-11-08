@@ -68,9 +68,35 @@ jobs:
           fi
 
       - name: Publish to crates.io
-        run: cargo publish --workspace
+        shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_API_TOKEN }}
+        run: |
+          total=0
+          excludes=()
+
+          while IFS=$'\t' read -r name version; do
+            total=$((total + 1))
+            code="$(curl -s -o /dev/null -w '%{http_code}' \
+              -A "ci-release-workflow" \
+              "https://crates.io/api/v1/crates/${name}/${version}")"
+
+            case "$code" in
+              200) echo "Skipping ${name}@${version} (already published)"
+                   excludes+=(--exclude "$name") ;;
+              404) echo "Will publish ${name}@${version}" ;;
+              *)   echo "Unexpected HTTP ${code} checking ${name}@${version}" >&2
+                   exit 1 ;;
+            esac
+          done < <(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.publish != []) | [.name, .version] | @tsv')
+
+          if (( ${#excludes[@]} / 2 == total )); then
+            echo "Everything is already published, nothing to do"
+            exit 0
+          fi
+
+          cargo publish --workspace "${excludes[@]}"
 
       - name: Create tag and GitHub Release
         uses: ncipollo/release-action@v1
