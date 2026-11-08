@@ -169,21 +169,21 @@ pub fn resolve_snapshot_id(identifier: &str, kv: &Arc<dyn KVStore>) -> Result<[u
 /// failing with a descriptive error when the context is missing.
 pub fn build_context(
     opt: Option<(FilesystemContext, KVStoreContext)>,
-    context_name: &str,
+    context_name: Option<&str>,
 ) -> Result<(Arc<dyn Fs>, Arc<dyn KVStore>), VerError> {
     if opt.is_none() {
-        return Err(format!("Context {context_name} not found").into());
+        return Err(format!("Context {} not found", context_name.unwrap_or("current")).into());
     }
     let (fs_des, kv_des) = opt.unwrap();
     let fs = fs_des.build_fs()?;
-    let kv = kv_des.build_kv()?;
+    let kv = kv_des.build_kv(context_name.unwrap())?;
     Ok((fs, kv))
 }
 
 /// Resolve the current context and build its filesystem and KV store handles.
 pub fn current_fs_kv() -> Result<(Arc<dyn Fs>, Arc<dyn KVStore>), VerError> {
     let ctx = read_context()?;
-    build_context(ctx.current_context(), "current")
+    build_context(ctx.current_context(), ctx.current.as_deref())
 }
 
 /// Load and deserialize a snapshot from the KV store.

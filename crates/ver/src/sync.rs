@@ -143,9 +143,9 @@ pub fn sync<O: io::Write>(
     let ctx = read_context()?;
     let (fs_from, kv_from) = match from {
         None => current_fs_kv()?,
-        Some(ref name) => build_context(ctx.get_context(name).ok(), name)?,
+        Some(ref name) => build_context(ctx.get_context(name).ok(), Some(name))?,
     };
-    let (fs_to, kv_to) = build_context(ctx.get_context(&to).ok(), &to)?;
+    let (fs_to, kv_to) = build_context(ctx.get_context(&to).ok(), Some(&to))?;
     let head_from = get_head(&fs_from)?;
     if head_from.is_none() {
         return Err(

@@ -385,12 +385,16 @@ impl KVStore for RedbStore {
 #[derive(Debug, Clone)]
 pub struct RedisStore {
     pub client: Arc<Client>,
+    pub namespace: String,
 }
 
 impl RedisStore {
-    pub fn new(uri: impl Into<String>) -> Result<Self, RedisError> {
+    pub fn new(uri: impl Into<String>, ns: impl Into<String>) -> Result<Self, RedisError> {
         let client = Arc::new(redis::Client::open(uri.into())?);
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            namespace: ns.into(),
+        })
     }
 }
 
@@ -402,7 +406,10 @@ impl KVStore for RedisStore {
             .map_err(|e| KVError::Get(format!("Error while getting Redis connection: {e}")))?;
         let new_key = blake3::Hash::from_bytes(key);
         let res: Option<Vec<u8>> = con
-            .get(format!("{}/{}", SNAPSHOTS_NAMESPACE, new_key))
+            .get(format!(
+                "{}/{}/{}",
+                self.namespace, SNAPSHOTS_NAMESPACE, new_key
+            ))
             .map_err(|e| KVError::Get(format!("Error while executing Redis `get` command: {e}")))?;
 
         Ok(res.map(Bytes::from))
@@ -414,8 +421,11 @@ impl KVStore for RedisStore {
             .get_connection()
             .map_err(|e| KVError::Put(format!("Error while getting Redis connection: {e}")))?;
         let new_key = blake3::Hash::from_bytes(key);
-        con.set(format!("{}/{}", SNAPSHOTS_NAMESPACE, new_key), value)
-            .map_err(|e| KVError::Put(format!("Error while executing Redis `set` command: {e}")))
+        con.set(
+            format!("{}/{}/{}", self.namespace, SNAPSHOTS_NAMESPACE, new_key),
+            value,
+        )
+        .map_err(|e| KVError::Put(format!("Error while executing Redis `set` command: {e}")))
     }
 
     fn get_name(&self, key: &str) -> Result<Option<[u8; 32]>, KVError> {
@@ -425,7 +435,7 @@ impl KVStore for RedisStore {
             .map_err(|e| KVError::Get(format!("Error while getting Redis connection: {e}")))?;
 
         let res: Option<Vec<u8>> = con
-            .get(format!("{}/{}", NAMES_NAMESPACE, key))
+            .get(format!("{}/{}/{}", self.namespace, NAMES_NAMESPACE, key))
             .map_err(|e| KVError::Get(format!("Error while executing Redis `get` command: {e}")))?;
 
         if let Some(v) = res {
@@ -448,8 +458,11 @@ impl KVStore for RedisStore {
             .client
             .get_connection()
             .map_err(|e| KVError::Put(format!("Error while getting Redis connection: {e}")))?;
-        con.set(format!("{}/{}", NAMES_NAMESPACE, key), value.as_slice())
-            .map_err(|e| KVError::Put(format!("Error while executing Redis `set` command: {e}")))
+        con.set(
+            format!("{}/{}/{}", self.namespace, NAMES_NAMESPACE, key),
+            value.as_slice(),
+        )
+        .map_err(|e| KVError::Put(format!("Error while executing Redis `set` command: {e}")))
     }
 
     fn get_merge(&self, key: &str) -> Result<Option<Bytes>, KVError> {
@@ -458,7 +471,10 @@ impl KVStore for RedisStore {
             .get_connection()
             .map_err(|e| KVError::Get(format!("Error while getting Redis connection: {e}")))?;
         let res: Option<Vec<u8>> = con
-            .get(format!("{}/{}", PARTIAL_MERGES_NAMESPACE, key))
+            .get(format!(
+                "{}/{}/{}",
+                self.namespace, PARTIAL_MERGES_NAMESPACE, key
+            ))
             .map_err(|e| KVError::Get(format!("Error while executing Redis `get` command: {e}")))?;
 
         Ok(res.map(Bytes::from))
@@ -469,8 +485,11 @@ impl KVStore for RedisStore {
             .client
             .get_connection()
             .map_err(|e| KVError::Put(format!("Error while getting Redis connection: {e}")))?;
-        con.set(format!("{}/{}", PARTIAL_MERGES_NAMESPACE, key), value)
-            .map_err(|e| KVError::Put(format!("Error while executing Redis `set` command: {e}")))
+        con.set(
+            format!("{}/{}/{}", self.namespace, PARTIAL_MERGES_NAMESPACE, key),
+            value,
+        )
+        .map_err(|e| KVError::Put(format!("Error while executing Redis `set` command: {e}")))
     }
 
     fn delete_merge(&self, key: &str) -> Result<(), KVError> {
@@ -478,8 +497,11 @@ impl KVStore for RedisStore {
             .client
             .get_connection()
             .map_err(|e| KVError::Delete(format!("Error while getting Redis connection: {e}")))?;
-        con.del(format!("{}/{}", PARTIAL_MERGES_NAMESPACE, key))
-            .map_err(|e| KVError::Put(format!("Error while executing Redis `del` command: {e}")))
+        con.del(format!(
+            "{}/{}/{}",
+            self.namespace, PARTIAL_MERGES_NAMESPACE, key
+        ))
+        .map_err(|e| KVError::Put(format!("Error while executing Redis `del` command: {e}")))
     }
 
     fn copy(&self, dest: &Arc<dyn KVStore>) -> Result<(), KVError> {
@@ -489,7 +511,7 @@ impl KVStore for RedisStore {
             .map_err(|e| KVError::Copy(format!("Error while getting Redis connection: {e}")))?;
 
         let snapshots = con
-            .scan_match::<_, String>(format!("{}/*", SNAPSHOTS_NAMESPACE))
+            .scan_match::<_, String>(format!("{}/{}/*", self.namespace, SNAPSHOTS_NAMESPACE))
             .map_err(|e| {
                 KVError::Copy(format!(
                     "Error while executing Redis `scan_match` command: {e}"
@@ -502,12 +524,14 @@ impl KVStore for RedisStore {
         for snapshot_key in snapshots {
             let mut key = snapshot_key
                 .map_err(|e| KVError::Copy(format!("Error while getting a snapshot key: {e}")))?;
-            let hashed = blake3::Hash::from_str(&key.split_off(SNAPSHOTS_NAMESPACE.len() + 1))
-                .map_err(|e| {
-                    KVError::Copy(format!(
-                        "Error while reconstructing the hash from hex string: {e}"
-                    ))
-                })?;
+            let hashed = blake3::Hash::from_str(
+                &key.split_off(self.namespace.len() + SNAPSHOTS_NAMESPACE.len() + 2),
+            )
+            .map_err(|e| {
+                KVError::Copy(format!(
+                    "Error while reconstructing the hash from hex string: {e}"
+                ))
+            })?;
             let kv_src = self.clone();
             let kv_dest = dest.clone();
             let tx = snapshots_tx.clone();
@@ -539,7 +563,7 @@ impl KVStore for RedisStore {
         }
 
         let names = con
-            .scan_match::<_, String>(format!("{}/*", NAMES_NAMESPACE))
+            .scan_match::<_, String>(format!("{}/{}/*", self.namespace, NAMES_NAMESPACE))
             .map_err(|e| {
                 KVError::Copy(format!(
                     "Error while executing Redis `scan_match` command: {e}"
@@ -551,7 +575,7 @@ impl KVStore for RedisStore {
         for name_key in names {
             let key = name_key
                 .map_err(|e| KVError::Copy(format!("Error while getting a snapshot key: {e}")))?
-                .split_off(NAMES_NAMESPACE.len() + 1);
+                .split_off(self.namespace.len() + NAMES_NAMESPACE.len() + 2);
             let kv_src = self.clone();
             let kv_dest = dest.clone();
             let tx = names_tx.clone();
@@ -581,7 +605,7 @@ impl KVStore for RedisStore {
         }
 
         let merges = con
-            .scan_match::<_, String>(format!("{}/*", PARTIAL_MERGES_NAMESPACE))
+            .scan_match::<_, String>(format!("{}/{}/*", self.namespace, PARTIAL_MERGES_NAMESPACE))
             .map_err(|e| {
                 KVError::Copy(format!(
                     "Error while executing Redis `scan_match` command: {e}"
@@ -593,7 +617,7 @@ impl KVStore for RedisStore {
         for merge_key in merges {
             let key = merge_key
                 .map_err(|e| KVError::Copy(format!("Error while getting a snapshot key: {e}")))?
-                .split_off(PARTIAL_MERGES_NAMESPACE.len() + 1);
+                .split_off(self.namespace.len() + PARTIAL_MERGES_NAMESPACE.len() + 2);
 
             let kv_src = self.clone();
             let kv_dest = dest.clone();

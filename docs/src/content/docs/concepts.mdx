@@ -67,6 +67,13 @@ Identical content is never stored twice, within one file or across the whole pro
 | Name → snapshot ID | KV | `names` table / `names` namespace |
 | Partial merges | KV | `partial_merges` table / `partial_merges` namespace |
 
+<Aside type="note">
+    _Available as of version 0.2.1-alpha_
+
+    Besides being namespaced by metadata class (name, snapshot or partial merge), Redis is also namespaced by context, so your
+    can re-use the same server for multiple contexts.
+</Aside>
+
 ## Ignoring files
 
 Create a `.verignore` file at the project root. It follows `.gitignore` syntax. The `.ver/` directory itself is always excluded from snapshots.
