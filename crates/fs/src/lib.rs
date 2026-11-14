@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf, pin::Pin, sync::Arc};
+use std::{fmt::Debug, io, path::PathBuf, pin::Pin, sync::Arc};
 
 use bytes::Bytes;
 use futures_util::stream::StreamExt;
@@ -11,7 +11,7 @@ use crate::errors::FsError;
 pub mod errors;
 pub mod object_store_factory;
 
-pub trait DirEntry: Send + Sync {
+pub trait DirEntry: Send + Sync + Debug {
     fn path(&self) -> PathBuf;
 }
 
@@ -38,13 +38,7 @@ pub trait Fs: Send + Sync {
     async fn copy_files(&self, dest: &Arc<dyn Fs>, paths: Vec<&str>) -> Result<(), FsError>;
 }
 
-impl DirEntry for ignore::DirEntry {
-    fn path(&self) -> PathBuf {
-        self.path().to_owned()
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RelativeDirEntry {
     pub path: PathBuf,
 }
@@ -106,6 +100,11 @@ impl DiskFs {
 
 fn to_relative_path(entry: ignore::DirEntry, parent: &PathBuf) -> RelativeDirEntry {
     let p = entry.path();
+    if !p.is_absolute() {
+        return RelativeDirEntry {
+            path: p.to_path_buf(),
+        };
+    }
     let rel = p
         .strip_prefix(parent)
         .expect("Should always start with self.base_dir");
@@ -327,7 +326,10 @@ impl ObjectStoreEntry {
 
 impl DirEntry for ObjectStoreEntry {
     fn path(&self) -> PathBuf {
-        PathBuf::from(self.location.to_string())
+        // Use the raw object key: `Display` for `ObjPath` percent-encodes, which
+        // would corrupt keys containing '%', spaces, '+' etc. on their way to
+        // read/write calls.
+        PathBuf::from(self.location.as_ref())
     }
 }
 
@@ -356,7 +358,7 @@ impl Fs for ObjectStoreFs {
         let response = self
             .object_store
             .get(
-                &ObjPath::from_url_path(path)
+                &ObjPath::parse(path)
                     .map_err(|e| FsError::Read(format!("Invalid object path: {}", e)))?,
             )
             .await
@@ -374,7 +376,7 @@ impl Fs for ObjectStoreFs {
     async fn write(&self, path: &str, data: Bytes) -> Result<(), FsError> {
         self.object_store
             .put(
-                &ObjPath::from_url_path(path)
+                &ObjPath::parse(path)
                     .map_err(|e| FsError::Write(format!("Invalid object path: {}", e)))?,
                 PutPayload::from_bytes(data),
             )
@@ -388,7 +390,7 @@ impl Fs for ObjectStoreFs {
         let res = self
             .object_store
             .delete(
-                &ObjPath::from_url_path(path)
+                &ObjPath::parse(path)
                     .map_err(|e| FsError::Delete(format!("Invalid object path: {}", e)))?,
             )
             .await;
@@ -412,8 +414,8 @@ impl Fs for ObjectStoreFs {
         // blocking `next()` prevents the producer from ever running.
         let stream = self
             .object_store
-            .list(Some(&ObjPath::from_url_path(path).map_err(|e| {
-                FsError::Delete(format!("Invalid object path: {}", e))
+            .list(Some(&ObjPath::parse(path).map_err(|e| {
+                FsError::List(format!("Invalid object path: {}", e))
             })?));
 
         let mut entries = Vec::new();
@@ -421,6 +423,12 @@ impl Fs for ObjectStoreFs {
         while let Some(item) = stream.next().await {
             let item =
                 item.map_err(|e| FsError::List(format!("Error while listing objects: {e}")))?;
+            // Skip directory-marker objects (zero-byte keys ending in "/") that
+            // S3 consoles and sync tools create: they are not files, and copying
+            // them to a real filesystem fails.
+            if item.location.as_ref().ends_with('/') {
+                continue;
+            }
             entries.push(ObjectStoreEntry::new(item.location));
         }
 
@@ -435,7 +443,7 @@ impl Fs for ObjectStoreFs {
         let res = self
             .object_store
             .head(
-                &ObjPath::from_url_path(path)
+                &ObjPath::parse(path)
                     .map_err(|e| FsError::Exists(format!("Invalid object path: {}", e)))?,
             )
             .await;
@@ -453,7 +461,7 @@ impl Fs for ObjectStoreFs {
         let response = self
             .object_store
             .get(
-                &ObjPath::from_url_path(path)
+                &ObjPath::parse(path)
                     .map_err(|e| FsError::Read(format!("Invalid object path: {}", e)))?,
             )
             .await

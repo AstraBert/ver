@@ -296,6 +296,82 @@ async fn mem_copy_dir() {
     assert_eq!(dst_trait.read("d/2.txt").await.unwrap().as_ref(), b"2");
 }
 
+#[tokio::test]
+async fn mem_paths_with_special_chars_roundtrip() {
+    let fs = mem_fs();
+    // Object keys are raw strings: names containing '%', spaces or '+' must not
+    // be URL-decoded/encoded on their way through the fs layer, or the object
+    // written at snapshot time cannot be listed/read back at sync time.
+    let paths = ["50% off.txt", "my file+final.txt", ".ver/blobsdb/100%.blob"];
+    for p in paths {
+        fs.write(p, b"data".to_vec().into()).await.unwrap();
+    }
+    for p in paths {
+        assert!(fs.exists(p).await.unwrap(), "exists failed for {p}");
+        assert_eq!(fs.read(p).await.unwrap().as_ref(), b"data");
+    }
+
+    let entries: Vec<_> = fs
+        .list("", None)
+        .await
+        .unwrap()
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .collect();
+    for p in paths {
+        assert!(entries.contains(&p.to_string()), "list missing {p}");
+    }
+}
+
+#[tokio::test]
+async fn mem_list_skips_directory_markers() {
+    let fs = mem_fs();
+    // S3 consoles and sync tools create zero-byte "folder" marker objects whose
+    // keys end in '/'. They are not files and must not be listed.
+    fs.write(".ver/blobsdb/", b"".to_vec().into())
+        .await
+        .unwrap();
+    fs.write(".ver/blobsdb/abc123", b"blob".to_vec().into())
+        .await
+        .unwrap();
+
+    let entries: Vec<_> = fs
+        .list(".ver/blobsdb", None)
+        .await
+        .unwrap()
+        .map(|e| e.path().to_string_lossy().into_owned())
+        .collect();
+
+    assert_eq!(entries, vec![".ver/blobsdb/abc123".to_string()]);
+}
+
+#[tokio::test]
+async fn obj_to_disk_copy_dir_ignores_directory_markers() {
+    let src = mem_fs();
+    let (_dst_tmp, dst) = disk_fs();
+    src.write(".ver/blobsdb/", b"".to_vec().into())
+        .await
+        .unwrap();
+    src.write(".ver/blobsdb/abc123", b"blob1".to_vec().into())
+        .await
+        .unwrap();
+
+    let dst_trait: Arc<dyn Fs> = dst;
+    // Writing a key ending in '/' to a real filesystem would fail; the marker
+    // must be skipped so the copy of the actual blobs succeeds.
+    src.copy_dir(&dst_trait, Some(".ver/blobsdb"), false)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        dst_trait
+            .read(".ver/blobsdb/abc123")
+            .await
+            .unwrap()
+            .as_ref(),
+        b"blob1"
+    );
+}
+
 // ---------- cross-backend ----------
 
 #[tokio::test]
@@ -308,4 +384,38 @@ async fn disk_to_memory_copy_dir() {
     src.copy_dir(&dst_trait, None, false).await.unwrap();
 
     assert_eq!(dst_trait.read("f.txt").await.unwrap().as_ref(), b"cross");
+}
+
+#[tokio::test]
+async fn memory_to_disk_copy_dir_nested() {
+    let src = mem_fs();
+    let (_dst_tmp, dst) = disk_fs();
+    src.write(".ver/blobsdb/abc123", b"blob1".to_vec().into())
+        .await
+        .unwrap();
+    src.write(".ver/blobsdb/def456", b"blob2".to_vec().into())
+        .await
+        .unwrap();
+
+    let dst_trait: Arc<dyn Fs> = dst;
+    src.copy_dir(&dst_trait, Some(".ver/blobsdb"), false)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        dst_trait
+            .read(".ver/blobsdb/abc123")
+            .await
+            .unwrap()
+            .as_ref(),
+        b"blob1"
+    );
+    assert_eq!(
+        dst_trait
+            .read(".ver/blobsdb/def456")
+            .await
+            .unwrap()
+            .as_ref(),
+        b"blob2"
+    );
 }

@@ -1091,6 +1091,52 @@ fn sync_without_source_head_errors() {
     assert!(sync(None, "synce_dst".into(), true, &mut out).is_err());
 }
 
+#[test]
+fn reconstruct_on_object_store_target_preserves_ver_internals() {
+    let _g = guard();
+    let src = setup_repo("recon_src", &[]);
+    src.write("keep.txt", "data");
+    let db_src = BlobsDBWithFs::new(src.fs.clone());
+    let chunks = rt().block_on(async { db_src.put("keep.txt").await.unwrap() });
+    let snap = Snapshot {
+        repository_state: HashMap::from([("keep.txt".to_string(), chunks)]),
+        parent_ids: vec![],
+        partial: false,
+    };
+
+    let os_fs: Arc<dyn Fs> = Arc::new(ver_fs::ObjectStoreFs::new(Arc::new(
+        object_store::memory::InMemory::new(),
+    )));
+    rt().block_on(async {
+        os_fs
+            .write(".ver/blobsdb/abc123", b"blob".to_vec().into())
+            .await
+            .unwrap();
+        os_fs
+            .write(".ver/snapshots_history/xyz", b"hist".to_vec().into())
+            .await
+            .unwrap();
+        os_fs
+            .write("stale.txt", b"old".to_vec().into())
+            .await
+            .unwrap();
+    });
+
+    let (del_failed, wrt_failed) =
+        reconstruct_snapshot(snap, &db_src, &os_fs, vec![], true).unwrap();
+    assert!(del_failed.is_empty() && wrt_failed.is_empty());
+
+    rt().block_on(async {
+        // .ver internals must survive the reconstruction...
+        assert!(os_fs.exists(".ver/blobsdb/abc123").await.unwrap());
+        assert!(os_fs.exists(".ver/snapshots_history/xyz").await.unwrap());
+        // ...while stale working-tree files are deleted and snapshot
+        // files are written.
+        assert!(!os_fs.exists("stale.txt").await.unwrap());
+        assert_eq!(os_fs.read("keep.txt").await.unwrap().as_ref(), b"data");
+    });
+}
+
 // ---------- merge ----------
 
 #[test]

@@ -293,6 +293,15 @@ pub fn reconstruct_snapshot(
     } else {
         rt().block_on(async { fs.list("", Some(Box::new(local_disk_walker))).await })?
             .map(|e| e.path().to_string_lossy().into_owned())
+            // `.ver` internals (blobs, history, head) must never be treated as
+            // deletable working-tree files. `local_disk_walker` excludes them,
+            // but object-store backends ignore the walker and list everything,
+            // so filter here as well to stay backend-independent.
+            .filter(|p| {
+                !std::path::Path::new(p)
+                    .components()
+                    .any(|c| c.as_os_str() == ".ver")
+            })
             .collect()
     };
 
