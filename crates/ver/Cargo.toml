@@ -1,6 +1,6 @@
 [package]
 name = "ver-vcs"
-version = "0.2.1-alpha"
+version = "0.2.2-alpha"
 edition = "2024"
 readme = "README.md"
 description = "An intuitive, easy-to-use and non git-like version control system."
@@ -39,3 +39,4 @@ pretty-hex = ["dep:pretty-hex"]
 
 [dev-dependencies]
 tempdir = "0.3.7"
+object_store = { workspace = true }

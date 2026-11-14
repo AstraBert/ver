@@ -2577,7 +2577,7 @@ dependencies = [
 
 [[package]]
 name = "ver-fs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2602,7 +2602,7 @@ dependencies = [
 
 [[package]]
 name = "ver-vcs"
-version = "0.2.1-alpha"
+version = "0.2.2-alpha"
 dependencies = [
  "blake3",
  "bytes",
@@ -2612,6 +2612,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "minus",
+ "object_store",
  "postcard",
  "pretty-hex",
  "redb",

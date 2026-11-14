@@ -15,6 +15,8 @@ use ver::{
     sync::sync,
 };
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Subcommand)]
 enum ContextCommands {
     /// Scaffold a new context
@@ -260,7 +262,11 @@ enum Commands {
     },
 }
 
+/// ver: an easy-to-use, non-git-like version control system
 #[derive(Parser)]
+#[command(version = VERSION)]
+#[command(name = "ver")]
+#[command(about, long_about = None)]
 struct Args {
     #[command(subcommand)]
     cmd: Commands,
