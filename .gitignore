@@ -3,5 +3,6 @@
 target/
 compose.yaml
 .versecrets.json
-scripts/
+scripts/*.sh
 .archived/
+.venv/
