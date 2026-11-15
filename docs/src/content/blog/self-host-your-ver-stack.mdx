@@ -1,0 +1,311 @@
+---
+title: Self-Host Your ver Stack
+description: A short guide on how to self-host S3 and Redis for ver
+author: Clelia Astra Bertelli
+pubDate: 2026-11-15
+tags:
+  - ver
+  - self-hosting
+  - kubernetes
+---
+
+If you're anything like me, you have a true passion for open source, and you'd rather spend hours debugging the self-hosted deployment of an OSS application than pay for yet another SaaS subscription every month.
+
+The good news is that `ver` doesn't only work with Amazon S3, Azure Blob Storage and Google Cloud Storage (all proprietary software): it works with _any_ S3-compatible service. This means you can self-host the entire remote stack that `ver` runs on, S3 and Redis included.
+
+This post focuses on Kubernetes, and specifically on a small homelab connected over a private network like a [tailnet](https://tailscale.com/docs/concepts/what-is-tailscale), rather than a full-blown production cluster. The setup should adapt to the latter with a few tweaks.
+
+## S3
+
+As our S3-compatible service we'll use [`garage`](https://garagehq.deuxfleurs.fr), an OSS project that has been around for almost six years.
+
+`garage` supports both single-node and multi-node deployments. Since I want good availability and my cluster has more than one node, I'll go with a replicated, multi-node deployment, spread so that no node runs more than one `garage` instance (no single point of failure).
+
+First, clone the repository, which contains the [helm](https://helm.sh) chart that gets `garage` up and running almost painlessly:
+
+```bash
+git clone https://git.deuxfleurs.fr/Deuxfleurs/garage.git
+cd garage/script/helm
+```
+
+You can go with the default values (see them with `helm show values ./garage`) or customize the deployment. In my case, I want to make sure of a few things:
+
+- The instances are evenly spread across nodes (I have 3 nodes, so I need 3 instances and anti-affinity rules)
+- Every instance holds a copy of the data (a replication factor of 3)
+- Enough storage that I won't have to think about resizing for a long time (100GiB should do the trick)
+- The S3 endpoint is exposed through a [Cloudflare tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/), so `garage`'s own ingress is disabled: the tunnel reaches the service over intra-cluster networking
+
+This is the `values.override.yaml` I ended up with:
+
+```yaml
+garage:
+  replicationFactor: 3
+  s3:
+    api:
+      region: garage
+
+deployment:
+  kind: StatefulSet
+  replicaCount: 3
+
+# one pod per machine
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - topologyKey: kubernetes.io/hostname
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: garage
+            app.kubernetes.io/instance: garage
+
+persistence:
+  meta:
+    storageClass: local-path
+    size: 1Gi
+  data:
+    storageClass: local-path
+    size: 100Gi
+
+# no Ingress: the tunnel reaches the Service directly
+ingress:
+  s3:
+    api:
+      enabled: false
+
+image:
+  repository: dxflrs/garage
+```
+
+<Aside type="tip">
+Wondering why the top-level `image` field is there? Because of ARM64 nodes: by default, the chart pulled `dxflrs/amd64_garage`, so you need to explicitly point it at the repository built for both architectures to make this work on ARM as well.
+</Aside>
+
+Install the chart:
+
+```bash
+helm install --create-namespace \
+    --namespace garage \
+    garage ./garage \
+    -f values.override.yaml
+```
+
+And verify that the roll-out is going smoothly (you should see one pod per node):
+
+```bash
+kubectl -n garage get pods -o wide
+```
+
+### Assign the cluster layout
+
+`garage` won't store anything until you tell it how the nodes are laid out. First, list the nodes and note their IDs:
+
+```bash
+kubectl -n garage exec garage-0 -- /garage status
+```
+
+Then assign each node to its own zone, so that each replica lands on a different machine. Set the capacity slightly below the size of the data volume:
+
+```bash
+kubectl -n garage exec garage-0 -- /garage layout assign -z node1 -c 90G <node-1-id>
+kubectl -n garage exec garage-0 -- /garage layout assign -z node2 -c 90G <node-2-id>
+kubectl -n garage exec garage-0 -- /garage layout assign -z node3 -c 90G <node-3-id>
+```
+
+Review the plan and apply it:
+
+```bash
+kubectl -n garage exec garage-0 -- /garage layout show
+kubectl -n garage exec garage-0 -- /garage layout apply --version 1
+```
+
+### Credentials and buckets
+
+Now we can create access credentials for this instance:
+
+```bash
+kubectl -n garage exec garage-0 -- /garage key create ver
+```
+
+This prints the key ID and the secret key. The secret is only shown once, so save it somewhere safe.
+
+Whenever you want a bucket for a `ver` project, you can create it and assign it to the `ver` credentials with this script (`create-bucket.sh`):
+
+```bash
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+BUCKET="${1:?usage: create-bucket.sh <bucket-name>}"
+
+kubectl -n garage exec garage-0 -- /garage bucket create "$BUCKET"
+kubectl -n garage exec garage-0 -- /garage bucket allow --read --write --owner "$BUCKET" --key ver
+```
+
+Then add the access key ID and secret, along with the bucket you just created, to `$HOME/.ver/contexts.toml` to set up a remote context:
+
+```toml
+[fs.project-remote]
+access_key_id = "..."
+secret_access_key = "..."
+region = "garage"
+endpoint = "https://<your-cloudflare-tunnel-endpoint>" # see next section
+bucket = "project"
+```
+
+And you're (almost) done! If you want to expose the service over HTTPS to clients outside your tailnet, as I do, set up a Cloudflare tunnel in the next section. Otherwise, you can simply rely on your private network and connect to `garage` through it.
+
+## Cloudflare
+
+From the Cloudflare dashboard, create a tunnel (**Networking** -> **Tunnels** -> **Create Tunnel**). The free tier is very generous and more than enough for self-hosting the `ver` remote stack.
+
+Once the tunnel is created, save its token, create a `cloudflared` namespace in Kubernetes and store the token in it as a secret:
+
+```bash
+kubectl create namespace cloudflared
+
+kubectl -n cloudflared create secret generic tunnel-token \
+  --from-literal=token='<YOUR_TUNNEL_TOKEN>'
+```
+
+Now put the following in `cloudflared.yaml` (consider pinning the image to a specific version instead of `latest`):
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cloudflared
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+    spec:
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:latest
+          args: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "run"]
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: tunnel-token
+                  key: token
+```
+
+And deploy it:
+
+```bash
+kubectl -n cloudflared apply -f cloudflared.yaml
+```
+
+Once both replicas are up, go back to the tunnel page in the Cloudflare dashboard, open **Routes** -> **Add route**, and add `s3.yourdomain.dev` as the hostname, with `http://garage.garage.svc.cluster.local:3900` as the service URL.
+
+No extra configuration is needed: you can now reach the S3-compatible API exposed by `garage` at `s3.yourdomain.dev`.
+
+## Redis
+
+Redis is much more straightforward than `garage`. We won't expose it publicly, so a `NodePort` service reachable over the private network (Tailscale, in my case) is all we need.
+
+Create a namespace and a password for authentication:
+
+```bash
+kubectl create namespace redis
+
+kubectl -n redis create secret generic redis-auth \
+  --from-literal=password="$(openssl rand -base64 24)"
+```
+
+Then write `redis.yaml`:
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$REDIS_PASSWORD\""]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path   # your storage class
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  type: NodePort
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+      nodePort: 30379
+```
+
+And deploy it:
+
+```bash
+kubectl -n redis apply -f redis.yaml
+```
+
+Redis should now be reachable over the private network on port `30379`. To test it:
+
+```bash
+export REDISCLI_AUTH="$(kubectl -n redis get secret redis-auth -o jsonpath='{.data.password}' | base64 -d)"
+redis-cli -h <node-name> -p 30379 ping # should output 'PONG'
+```
+
+<Aside type="caution">
+A `NodePort` listens on every network interface of every node, not just the Tailscale one. If your nodes are reachable from the internet or an untrusted network, make sure port `30379` is firewalled off from everything except your tailnet.
+</Aside>
+
+With that working, we can add Redis as the KV backend too:
+
+```toml
+[kv.project-remote]
+uri = "redis://:<password>@<node-name>:30379"
+```
+
+<Aside type="tip">
+As of v0.2.1-alpha, Redis keys are namespaced by context, so you can reuse the same server for multiple contexts.
+</Aside>
+
+## That's All, Folks!
+
+That's everything you need to host `ver` projects on your own infrastructure. On the bright side, you'll probably run into fewer reliability problems than with other git hosting services in recent times. On the flip side, when things go down, you won't be able to just be mad at colorful unicorns on your screen: you'll have to debug it yourself.
+
+Happy k8s-ing!
