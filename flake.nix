@@ -31,6 +31,14 @@
             homepage = "https://ver-vcs.net";
             mainProgram = "ver";
           };
+
+          nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
+          buildInputs = [ pkgs.zstd ];
+          dontUseCmakeConfigure = true;
+
+          preBuild = ''
+            unset AWS_LC_SYS_USE_SYSTEM
+          '';
         };
         default = ver;
       });
